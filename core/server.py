@@ -6,15 +6,19 @@ import hashlib
 from collections import OrderedDict
 import json
 import os
+import threading
 import time
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
+from calibration.session import CalibConfig, Session
 from core.observers import Observer, heldout_observers, train_observers
+from core.profiles import PROFILE_PREFIX, ProfileStore, profile_observer
 from core.solver.problem import Scene, SolverConfig
 from core.solver.solver import correct as solver_correct
 from protocol.models import ConfusionPair, Cue, Diagnostics, Overrides, PaletteOverride, Snapshot
@@ -54,8 +58,8 @@ def solver_observers(obs: Observer, table: dict[str, Observer]) -> list[Observer
     return pool or [Observer("fallback", "train", "machado", obs.kind, 1.0)]
 
 
-def signature(snap: Snapshot) -> str:
-    h = hashlib.sha1(snap.observer_id.encode())
+def signature(snap: Snapshot, extra: str = "") -> str:
+    h = hashlib.sha1((snap.observer_id + extra).encode())
     h.update(snap.lighting.model_dump_json().encode())
     for o in snap.objects:
         h.update(repr((o.id, o.cls, o.state, [round(x, 3) for x in o.albedo_rgb], [round(x, 3) for x in o.emissive_rgb],
@@ -106,12 +110,13 @@ class Corrector:
         self.solves = 0
         self.cfg_extra: dict = {}
 
-    def __call__(self, snap: Snapshot) -> Overrides:
-        obs = self.table.get(snap.observer_id)
+    def __call__(self, snap: Snapshot, observer: Observer | None = None) -> Overrides:
+        """observer: explicit (e.g. profile posterior mean); else looked up by snap.observer_id in the fixed pool."""
+        obs = observer or self.table.get(snap.observer_id)
         if obs is None:
             raise KeyError(snap.observer_id)
         t0 = time.perf_counter()
-        sig = signature(snap)
+        sig = signature(snap, repr(obs.to_dict()) if observer else "")
         hit = self.cache.get(sig)
         if hit and not (self.resolve_every and snap.frame - hit[0] >= self.resolve_every):
             self.cache.move_to_end(sig)
@@ -127,7 +132,47 @@ class Corrector:
         return ov
 
 
-def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0) -> FastAPI:
+class SelfReportIn(BaseModel):
+    """Optional; only shapes the prior."""
+    model_config = ConfigDict(extra="forbid")
+    type_guess: Literal["protan", "deutan", "tritan", "unsure"] | None = None
+    struggle_colors: list[str] = Field(default_factory=list, max_length=12)
+
+
+class CreateProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    self_report: SelfReportIn | None = None
+    config: dict = Field(default_factory=dict)   # CalibConfig fields: seed, mode, target_width, min_trials, max_trials
+
+
+class AnswerIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    trial_id: int
+    response: str | float   # "same"|"different" or slider value in [0,1]
+
+
+NOTE = "Accessibility parameters estimated from your answers; not a medical diagnosis."
+
+
+class Sessions:
+    """Live calibration sessions; rebuilt from the stored trial log (exact replay) after a restart."""
+
+    def __init__(self, store: ProfileStore):
+        self.store, self.live, self.lock = store, {}, threading.Lock()
+
+    def get(self, pid: str):
+        with self.lock:
+            ent = self.live.get(pid)
+            if ent is None:
+                prof = self.store.get(pid)
+                if prof is None:
+                    return None, None
+                sess = Session.replay(CalibConfig.from_dict(prof["config"]), prof["self_report"], self.store.trials(pid))
+                ent = self.live[pid] = (sess, threading.Lock())
+            return ent
+
+
+def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0, profiles_db: Path | str | None = None) -> FastAPI:
     app = FastAPI(title="SemanticVision core")
     app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"])
     out_dir = Path(gt_dir or os.environ.get("SV_GT_DIR") or GT_DIR)
@@ -144,12 +189,90 @@ def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0) -> Fast
         return {"train": [o.to_dict() for o in corrector.table.values() if o.split == "train"],
                 "heldout": [o.to_dict() for o in corrector.table.values() if o.split == "heldout"]}
 
+    store = ProfileStore(profiles_db or os.environ.get("SV_PROFILE_DB") or None)
+    sessions = Sessions(store)
+    app.state.profiles, app.state.sessions = store, sessions
+
     @app.post("/correct", response_model=Overrides)
     def post_correct(snap: Snapshot) -> Overrides:
         try:
+            if snap.observer_id.startswith(PROFILE_PREFIX):
+                pid = snap.observer_id[len(PROFILE_PREFIX):]
+                prof = store.get(pid)
+                if prof is None:
+                    raise KeyError(pid)
+                return corrector(snap, profile_observer(pid, prof["summary"]))
             return corrector(snap)
         except KeyError:
             raise HTTPException(404, f"unknown observer_id {snap.observer_id}")
+
+    # ---- calibration profiles ----
+    def _view(prof: dict, sess: Session | None, samples: bool = False) -> dict:
+        out = dict(id=prof["id"], status=prof["status"], n_trials=prof["n_trials"], config=prof["config"],
+                   self_report=prof["self_report"], summary=prof["summary"], note=NOTE,
+                   n_samples=len(next(iter(prof["samples"].values()))) if prof["samples"] else 0)
+        if sess is not None:
+            out["progress"] = sess.progress()
+        if samples:
+            out["samples"] = prof["samples"]
+        return out
+
+    @app.post("/profiles", status_code=201)
+    def post_profile(req: CreateProfile):
+        sr = req.self_report.model_dump() if req.self_report else {}
+        try:
+            cfg = CalibConfig.from_dict(req.config)
+            sess = Session(cfg, sr)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(422, str(e))
+        pid = store.create(cfg.to_dict(), sr, sess.summary())
+        sessions.live[pid] = (sess, threading.Lock())
+        return _view(store.get(pid), sess)
+
+    @app.get("/profiles/{pid}")
+    def get_profile(pid: str, samples: bool = False):
+        prof = store.get(pid)
+        if prof is None:
+            raise HTTPException(404, "unknown profile")
+        sess, _ = sessions.get(pid)
+        return _view(prof, sess, samples)
+
+    @app.get("/profiles/{pid}/next")
+    def profile_next(pid: str):
+        sess, lock = sessions.get(pid)
+        if sess is None:
+            raise HTTPException(404, "unknown profile")
+        if store.get(pid)["status"] == "complete":
+            raise HTTPException(409, "profile already finished")
+        with lock:
+            stim = sess.next()
+            return {"done": stim is None, "progress": sess.progress(), "stimulus": stim}
+
+    @app.post("/profiles/{pid}/answer")
+    def profile_answer(pid: str, a: AnswerIn):
+        sess, lock = sessions.get(pid)
+        if sess is None:
+            raise HTTPException(404, "unknown profile")
+        if store.get(pid)["status"] == "complete":
+            raise HTTPException(409, "profile already finished")
+        with lock:
+            try:
+                stim, mode, resp = sess.answer(a.trial_id, a.response)
+            except KeyError:
+                raise HTTPException(409, "no such pending trial (call /next first)")
+            except ValueError as e:
+                raise HTTPException(422, str(e))
+            store.add_trial(pid, sess.n - 1, stim, mode, resp, sess.summary())
+            return {"progress": sess.progress(), "summary": sess.summary()}
+
+    @app.post("/profiles/{pid}/finish")
+    def profile_finish(pid: str):
+        sess, lock = sessions.get(pid)
+        if sess is None:
+            raise HTTPException(404, "unknown profile")
+        with lock:
+            store.finish(pid, sess.summary(full=True), sess.cal.samples(500))
+        return _view(store.get(pid), sess)
 
     @app.post("/gt")
     def post_gt(g: GTFrame):
