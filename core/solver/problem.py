@@ -27,6 +27,8 @@ class SolverConfig:
     budget_ms: float = 1500.0
     retries: int = 3
     n_cues: int = 8
+    risk: str = "softmin"        # softmin (legacy, pooled over observers) | cvar | worst  (SPEC 5.5 K2)
+    alpha: float = 0.25          # CVaR tail fraction over the M observers (lowest ceil(alpha*M) separations)
 
 
 def memory_mask(colors, classes=None, tags=None, brand=None, tol=3.0):
@@ -240,8 +242,8 @@ class Problem:
         return np.clip(self._rgb(lab), 0, 1)
 
     # --- objective ---------------------------------------------------------------------------
-    def separation_terms(self, X):
-        """X (B,E,3) projected Lab -> capped distances (B, M*P) under each observer's CVD + threshold."""
+    def separation_tensor(self, X):
+        """X (B,E,3) projected Lab -> capped distances (B, M, P) under each observer's CVD + threshold."""
         B = X.shape[0]
         flat = self.to_rgb(X).reshape(-1, 3)
         out = []
@@ -249,7 +251,19 @@ class Problem:
             lab = C.linear_to_lab(Dst.perceived(flat, **self.scene.perceive_kw(o))).reshape(B, self.E, 3)
             D = C.ciede2000(lab[:, self.ia], lab[:, self.ib])
             out.append(np.minimum(D, self.cfg.cap * self.tau[m]))
-        return np.concatenate(out, 1)
+        return np.stack(out, 1)
+
+    def separation_terms(self, X):
+        """-> (B, M*P) pooled over observers."""
+        V = self.separation_tensor(X)
+        return V.reshape(V.shape[0], -1)
+
+    def risk_terms(self, V):
+        """(B,M,P) -> (B,P) per-pair risk over observers: worst case or CVaR_alpha (mean of the lowest tail)."""
+        if self.cfg.risk == "worst":
+            return V.min(1)
+        k = max(1, int(np.ceil(self.cfg.alpha * V.shape[1] - 1e-9)))
+        return np.partition(V, k - 1, axis=1)[:, :k].mean(1)
 
     def softmin(self, V):
         M = len(self.obs)
@@ -264,4 +278,9 @@ class Problem:
         X = self.project(P)
         if not len(self.pairs):
             return -self.cfg.lam * self.deviation(X).mean(-1)
-        return self.softmin(self.separation_terms(X)) - self.cfg.lam * self.deviation(X).mean(-1)
+        dev = self.cfg.lam * self.deviation(X).mean(-1)
+        if self.cfg.risk in ("cvar", "worst"):
+            lw = np.log(self.w * self.boost)
+            R = self.risk_terms(self.separation_tensor(X))
+            return -(logsumexp(-self.beta * R + lw, axis=1) - logsumexp(lw)) / self.beta - dev
+        return self.softmin(self.separation_terms(X)) - dev

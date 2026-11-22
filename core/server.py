@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from calibration.session import CalibConfig, Session
 from core.observers import Observer, heldout_observers, train_observers
-from core.profiles import PROFILE_PREFIX, ProfileStore, profile_observer
+from core.profiles import PROFILE_PREFIX, ProfileStore, profile_observer, samples_to_observers
 from core.solver.problem import Scene, SolverConfig
 from core.solver.solver import correct as solver_correct
 from protocol.models import ConfusionPair, Cue, Diagnostics, Overrides, PaletteOverride, Snapshot
@@ -69,15 +69,24 @@ def signature(snap: Snapshot, extra: str = "") -> str:
     return h.hexdigest()
 
 
-def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: dict | None = None) -> Overrides:
+ROBUST_MODES = ("point", "cvar", "worst")
+POSTERIOR_M = 6      # posterior samples in the live solve (latency scales ~M)
+
+
+def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: dict | None = None,
+          posterior: list[Observer] | None = None, risk: str = "point") -> Overrides:
+    """posterior + risk in (cvar, worst): optimise the risk measure over the posterior observers; the reported
+    confusion pairs stay under `obs` (the posterior mean)."""
     t0 = time.perf_counter()
     lat: dict[str, float] = {}
     if not snap.objects:
         return Overrides(frame=snap.frame, diagnostics=Diagnostics(stage_latency_ms={"total": 0.0}, solver_tier="none"))
     scene = Scene.from_snapshot(snap)
     t1 = time.perf_counter(); lat["scene"] = (t1 - t0) * 1e3
-    cfg = SolverConfig(budget_ms=float(snap.budget_ms), **{**LIVE_CFG, **(cfg_extra or {})})
-    sol = solver_correct(scene, solver_observers(obs, table), cfg, seed=0)
+    robust = bool(posterior) and risk in ("cvar", "worst")
+    cfg = SolverConfig(budget_ms=float(snap.budget_ms), **{**LIVE_CFG, **(cfg_extra or {})},
+                       **(dict(risk=risk) if robust else {}))
+    sol = solver_correct(scene, posterior if robust else solver_observers(obs, table), cfg, seed=0)
     t2 = time.perf_counter(); lat["solve"] = (t2 - t1) * 1e3
     g0, g1 = scene.graph(obs), scene.graph(obs, sol.colors)
     D1 = g1.D
@@ -103,20 +112,26 @@ class Corrector:
     """Signature-cached live corrector: re-solves only when the scene/observer signature changes
     (or every `resolve_every` frames; 0 = never)."""
 
-    def __init__(self, resolve_every: int = 0, max_cache: int = 64):
+    def __init__(self, resolve_every: int = 0, max_cache: int = 64, robust: str = "point"):
+        if robust not in ROBUST_MODES:
+            raise ValueError(f"robust must be one of {ROBUST_MODES}")
+        self.robust = robust                  # profile observers: point (posterior mean) | cvar | worst
         self.table = observer_table()
         self.resolve_every, self.max_cache = resolve_every, max_cache
         self.cache: OrderedDict[str, tuple[int, Overrides]] = OrderedDict()
         self.solves = 0
         self.cfg_extra: dict = {}
 
-    def __call__(self, snap: Snapshot, observer: Observer | None = None) -> Overrides:
-        """observer: explicit (e.g. profile posterior mean); else looked up by snap.observer_id in the fixed pool."""
+    def __call__(self, snap: Snapshot, observer: Observer | None = None, posterior: list[Observer] | None = None) -> Overrides:
+        """observer: explicit (e.g. profile posterior mean); else looked up by snap.observer_id in the fixed pool.
+        posterior: M posterior-sample observers, used when self.robust is cvar|worst."""
         obs = observer or self.table.get(snap.observer_id)
         if obs is None:
             raise KeyError(snap.observer_id)
+        risk = self.robust if posterior else "point"
         t0 = time.perf_counter()
-        sig = signature(snap, repr(obs.to_dict()) if observer else "")
+        sig = signature(snap, (repr(obs.to_dict()) + risk + repr([o.to_dict() for o in posterior or []])
+                               if risk != "point" else repr(obs.to_dict())) if observer else "")
         hit = self.cache.get(sig)
         if hit and not (self.resolve_every and snap.frame - hit[0] >= self.resolve_every):
             self.cache.move_to_end(sig)
@@ -124,7 +139,7 @@ class Corrector:
             lat = {"total": (time.perf_counter() - t0) * 1e3}
             return hit[1].model_copy(update={"frame": snap.frame, "diagnostics": Diagnostics(
                 stage_latency_ms=lat, solver_tier="cached", fallback_flags=d.fallback_flags)})
-        ov = solve(snap, obs, self.table, self.cfg_extra)
+        ov = solve(snap, obs, self.table, self.cfg_extra, posterior, risk)
         self.solves += 1
         self.cache[sig] = (snap.frame, ov)
         while len(self.cache) > self.max_cache:
@@ -172,7 +187,8 @@ class Sessions:
             return ent
 
 
-def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0, profiles_db: Path | str | None = None) -> FastAPI:
+def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0, profiles_db: Path | str | None = None,
+               robust: str | None = None) -> FastAPI:
     app = FastAPI(title="SemanticVision core")
     app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"])
     out_dir = Path(gt_dir or os.environ.get("SV_GT_DIR") or GT_DIR)
@@ -181,7 +197,7 @@ def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0, profile
     def health():
         return {"ok": True}
 
-    corrector = Corrector(resolve_every)
+    corrector = Corrector(resolve_every, robust=robust or os.environ.get("SV_ROBUST") or "point")
     app.state.corrector = corrector
 
     @app.get("/observers")
@@ -201,7 +217,9 @@ def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0, profile
                 prof = store.get(pid)
                 if prof is None:
                     raise KeyError(pid)
-                return corrector(snap, profile_observer(pid, prof["summary"]))
+                post = (samples_to_observers(prof["samples"], POSTERIOR_M, pid)
+                        if corrector.robust != "point" and prof.get("samples") else None)
+                return corrector(snap, profile_observer(pid, prof["summary"]), post)
             return corrector(snap)
         except KeyError:
             raise HTTPException(404, f"unknown observer_id {snap.observer_id}")

@@ -72,17 +72,21 @@ def coordinate_descent(pb: Problem, P0=None, deadline=None):
     return P, cur
 
 
-def screen_check(scene: Scene, obj_rgb, observers):
+def screen_check(scene: Scene, obj_rgb, observers, frac: float = 0.0):
     """Screen-space re-evaluation: per-object confusion graph of the corrected colours (true object sizes,
-    adjacency) under each observer; returns failing (group, group) pairs and object-id pairs."""
-    gp, ip = set(), set()
+    adjacency) under each observer; returns failing (group, group) pairs and object-id pairs.
+    A pair fails if it is confusable for more than `frac` of the observers (0 = any observer)."""
+    cnt, ids = {}, {}
     for o in observers:
         g = scene.graph(o, obj_rgb)
         for i, j in g.edges:
             a, b = int(scene.groups[i]), int(scene.groups[j])
             if a != b:
-                gp.add((min(a, b), max(a, b))); ip.add((scene.ids[i], scene.ids[j]))
-    return sorted(gp), sorted(ip)
+                k = (min(a, b), max(a, b))
+                cnt[k] = cnt.get(k, 0) + 1
+                ids.setdefault(k, set()).add((scene.ids[i], scene.ids[j]))
+    bad = [k for k, c in cnt.items() if c > frac * len(observers) + 1e-9]
+    return sorted(bad), sorted(p for k in bad for p in ids[k])
 
 
 def _package(scene, pb, P, obj, t0, attempts, observers, fail=None):
@@ -102,15 +106,16 @@ def correct(scene: Scene, observers, cfg: SolverConfig = SolverConfig(), seed=0)
     hard = t0 + cfg.budget_ms / 1e3                      # whole call, incl. verification and packaging
     rng = np.random.default_rng([seed, 0xC0D])
     pb = Problem(scene, observers, cfg)
+    frac = cfg.alpha if cfg.risk == "cvar" else 0.0      # CVaR tolerates failures in the worst alpha tail
     tc = time.perf_counter()
-    screen_check(scene, scene.colors, observers)         # also measures the verification cost to reserve for it
+    screen_check(scene, scene.colors, observers, frac)   # also measures the verification cost to reserve for it
     reserve = 1.5 * (time.perf_counter() - tc)
     deadline = hard - reserve                            # descent stops here so verification still fits the budget
     P, obj = coordinate_descent(pb, deadline=deadline)
     best, att = None, 0
     for att in range(cfg.retries + 1):
         X = pb.project(P[None])[0]
-        fail = screen_check(scene, pb.to_rgb(X)[scene.groups], observers)
+        fail = screen_check(scene, pb.to_rgb(X)[scene.groups], observers, frac)
         if best is None or len(fail[0]) < len(best[2][0]):
             best = (P.copy(), obj, fail)
         if not fail[0] or time.perf_counter() > deadline or att == cfg.retries:

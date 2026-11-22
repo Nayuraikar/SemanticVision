@@ -111,3 +111,28 @@ def profile_observer(pid: str, summary: dict) -> Observer:
     S = 0.5 * (sL + sC)
     return Observer(id=f"{PROFILE_PREFIX}{pid}", split="train", model="machado", kind=KINDS[i],
                     severity=float(np.clip(e[i], 0.0, 1.0)), k=float(p["k"]["mean"]) * S, s_L=sL, s_C=sC)
+
+
+def samples_to_observers(samples: dict, m: int = 8, pid: str = "post") -> list[Observer]:
+    """Posterior samples (Calibrator.samples() / stored profile `samples`: dict of equal-weight columns) -> M Observers.
+    Same convention as profile_observer, per sample: kind = argmax e_i, severity = e_i, k rescaled by (s_L+s_C)/2.
+    Samples are already shuffled/equal-weight, so the first M (strided if more) are a fair subsample."""
+    n = len(samples["e_protan"])
+    idx = np.unique(np.linspace(0, n - 1, min(m, n)).round().astype(int))
+    out = []
+    for r, j in enumerate(idx):
+        e = np.array([samples["e_protan"][j], samples["e_deutan"][j], samples["e_tritan"][j]])
+        i = int(np.argmax(e))
+        sL, sC = float(samples["s_L"][j]), float(samples["s_C"][j])
+        out.append(Observer(id=f"{PROFILE_PREFIX}{pid}#{r}", split="train", model="machado", kind=KINDS[i],
+                            severity=float(np.clip(e[i], 0.0, 1.0)), k=float(samples["k"][j]) * 0.5 * (sL + sC),
+                            s_L=sL, s_C=sC))
+    return out
+
+
+def posterior_mean_observer(samples: dict, pid: str = "post") -> Observer:
+    """Point estimate = posterior mean of the samples (k: geometric mean), via profile_observer."""
+    mean = lambda key: float(np.mean(samples[key]))
+    params = {k: {"mean": mean(k)} for k in ("e_protan", "e_deutan", "e_tritan", "s_L", "s_C")}
+    params["k"] = {"mean": float(np.exp(np.mean(np.log(samples["k"]))))}
+    return profile_observer(pid, {"params": params})
