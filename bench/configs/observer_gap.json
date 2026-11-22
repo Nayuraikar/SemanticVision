@@ -1,0 +1,2 @@
+{"name": "observer_gap", "experiment": "observer_gap", "n_seeds": 5, "baseline": "train",
+ "params": {"scene": {"n_objects": 10, "n_frames": 60}, "stride": 10, "n_observers": 6}}
