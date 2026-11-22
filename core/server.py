@@ -56,10 +56,12 @@ def solver_observers(obs: Observer, table: dict[str, Observer]) -> list[Observer
 
 def signature(snap: Snapshot) -> str:
     h = hashlib.sha1(snap.observer_id.encode())
+    h.update(snap.lighting.model_dump_json().encode())
     for o in snap.objects:
         h.update(repr((o.id, o.cls, o.state, [round(x, 3) for x in o.albedo_rgb], [round(x, 3) for x in o.emissive_rgb],
                        round(o.bbox.x, 2), round(o.bbox.y, 2), round(o.bbox.w, 2), round(o.bbox.h, 2),
-                       tuple(o.task_tags))).encode())
+                       tuple(o.task_tags), o.normal and [round(x, 2) for x in o.normal],
+                       o.shadow_vis and round(o.shadow_vis, 2))).encode())
     return h.hexdigest()
 
 
@@ -83,7 +85,9 @@ def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: 
         for k in np.flatnonzero(scene.groups == gidx):
             cues.append(Cue(id=scene.ids[k], type=typ, parameters={"variant": var, **CUE_PARAMS[typ](var)}))
     t3 = time.perf_counter(); lat["pairs_cues"] = (t3 - t2) * 1e3
-    po = [PaletteOverride(id=o.id, albedo=tuple(float(np.clip(x, 0, 1)) for x in sol.colors[i]), emissive=o.emissive_rgb)
+    alb, em = scene.to_overrides(sol.colors)       # lit colours back to albedo / emission (never scaled by irradiance)
+    po = [PaletteOverride(id=o.id, albedo=tuple(float(x) for x in alb[i]),
+                          emissive=o.emissive_rgb if em is None else tuple(float(x) for x in em[i]))
           for i, o in enumerate(snap.objects)]
     flags = (["cue_unresolved"] if sol.cue_unresolved else []) + (["infeasible_pairs"] if sol.infeasible_ids else [])
     lat["total"] = (time.perf_counter() - t0) * 1e3

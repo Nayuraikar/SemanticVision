@@ -1,6 +1,7 @@
 // Three.js adapter: export per-frame Snapshot (SPEC 4.2). Engine code lives only here.
 import * as THREE from "three";
-import type { AmbientDominantLighting, SceneObject, Snapshot } from "./protocol.gen";
+import type { SceneObject, Snapshot } from "./protocol.gen";
+import { exportLightingSH, irradiance, litColor, shadowVisibility } from "./lighting";
 import { SCHEMA_VERSION } from "./protocol.gen";
 
 /** Semantic tag carried on each exported Mesh via mesh.userData.sv. */
@@ -38,42 +39,6 @@ export function originalColors(m: SVMesh): OrigColors {
   return { albedo: m.material.color.toArray().slice(0, 3) as Vec3, emissive: [e.r * k, e.g * k, e.b * k] };
 }
 
-export function exportLighting(scene: THREE.Scene): AmbientDominantLighting {
-  scene.updateMatrixWorld(true);
-  const amb: Vec3 = [0, 0, 0];
-  let dom: Vec3 = [0, 0, 0];
-  let dir = new THREE.Vector3(0, 1, 0);
-  let best = -1;
-  scene.traverse((o) => {
-    const l = o as THREE.Light;
-    if (!l.isLight) return;
-    const rgb = l.color.toArray();
-    if ((l as THREE.AmbientLight).isAmbientLight) {
-      for (let i = 0; i < 3; i++) amb[i] += rgb[i] * l.intensity;
-    } else if ((l as THREE.HemisphereLight).isHemisphereLight) {
-      const g = (l as THREE.HemisphereLight).groundColor.toArray();
-      for (let i = 0; i < 3; i++) amb[i] += 0.5 * (rgb[i] + g[i]) * l.intensity;
-    } else if ((l as THREE.DirectionalLight).isDirectionalLight) {
-      const p = new THREE.Vector3().setFromMatrixPosition(l.matrixWorld);
-      const t = (l as THREE.DirectionalLight).target;
-      const d = p.sub(new THREE.Vector3().setFromMatrixPosition(t.matrixWorld));
-      const lum = (rgb[0] + rgb[1] + rgb[2]) * l.intensity;
-      if (d.lengthSq() > 0 && lum > best) {
-        best = lum;
-        dom = [rgb[0] * l.intensity, rgb[1] * l.intensity, rgb[2] * l.intensity];
-        dir = d.normalize();
-      }
-    }
-  });
-  return {
-    kind: "ambient_dominant",
-    ambient_rgb: amb.map(r6) as Vec3,
-    dominant_rgb: dom.map(r6) as Vec3,
-    dominant_dir: [r6(dir.x), r6(dir.y), r6(dir.z)],
-    exposure: 1,
-  };
-}
-
 export interface ExportOpts {
   frame: number;
   t: number;
@@ -86,13 +51,33 @@ export interface ExportOpts {
 
 const _c = new THREE.Vector3();
 
+/** World normal of the surface facing the camera: box -> best-facing local axis; other shapes -> towards the camera. */
+function facingNormal(m: THREE.Mesh, box: THREE.Box3, camera: THREE.Camera): THREE.Vector3 {
+  const ctr = box.getCenter(new THREE.Vector3());
+  const toCam = camera.position.clone().sub(ctr).normalize();
+  if (m.geometry.type !== "BoxGeometry") return toCam;
+  const q = m.getWorldQuaternion(new THREE.Quaternion());
+  let best = toCam, bd = -2;
+  for (const ax of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+    const w = new THREE.Vector3(ax[0], ax[1], ax[2]).applyQuaternion(q);
+    const d = w.dot(toCam);
+    if (d > bd) { bd = d; best = w; }
+  }
+  return best;
+}
+
 export function exportSnapshot(scene: THREE.Scene, camera: THREE.PerspectiveCamera, o: ExportOpts): Snapshot {
   scene.updateMatrixWorld(true);
   camera.updateMatrixWorld(true);
   const dt = o.prevT !== undefined ? o.t - o.prevT : 0;
   const objects: SceneObject[] = [];
   const box = new THREE.Box3();
-  for (const m of svMeshes(scene)) {
+  const meshes = svMeshes(scene);
+  const centroid = new THREE.Vector3();
+  for (const m of meshes) centroid.add(new THREE.Vector3().setFromMatrixPosition(m.matrixWorld));
+  if (meshes.length) centroid.divideScalar(meshes.length);
+  const lighting = exportLightingSH(scene, centroid);
+  for (const m of meshes) {
     const tag = m.userData.sv as SVTag;
     // geometry-only box: cue children (outline, labels) must not inflate the exported bbox
     if (!m.geometry.boundingBox) m.geometry.computeBoundingBox();
@@ -111,24 +96,38 @@ export function exportSnapshot(scene: THREE.Scene, camera: THREE.PerspectiveCame
     const cx0 = c01(x0), cy0 = c01(y0), cx1 = c01(x1), cy1 = c01(y1);
     const area = (cx1 - cx0) * (cy1 - cy0);
     if (area <= 0) continue; // not in view
-    const ctr = box.getCenter(new THREE.Vector3());
-    const depth = -ctr.applyMatrix4(camera.matrixWorldInverse).z;
+    const ctr0 = box.getCenter(new THREE.Vector3());
+    const depth = -ctr0.clone().applyMatrix4(camera.matrixWorldInverse).z;
     const cur: [number, number] = [(x0 + x1) / 2, (y0 + y1) / 2];
     const pv = o.prev?.get(tag.id);
     const vel: [number, number] = pv && dt > 0 ? [(cur[0] - pv[0]) / dt, (cur[1] - pv[1]) / dt] : [0, 0];
     o.prev?.set(tag.id, cur);
     const col = originalColors(m);
+    const nrm = facingNormal(m, box, camera);
+    const pos: Vec3 = [ctr0.x, ctr0.y, ctr0.z];
+    const half = 0.5 * Math.abs(nrm.x) * (box.max.x - box.min.x) + 0.5 * Math.abs(nrm.y) * (box.max.y - box.min.y) +
+      0.5 * Math.abs(nrm.z) * (box.max.z - box.min.z);
+    const facePt = ctr0.clone().addScaledVector(nrm, half + 1e-3);
+    const vis = shadowVisibility(scene, m, facePt, 0.5 * Math.max(box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z), lighting.dominant);
+    const nA: Vec3 = [nrm.x, nrm.y, nrm.z];
+    const alb = col.albedo.map((v) => r6(c01(v))) as Vec3;
+    const emi = col.emissive.map((v) => r6(Math.max(0, v))) as Vec3;
+    const lit = litColor(alb, emi, irradiance(lighting, nA, pos, vis), lighting.exposure ?? 1);
     objects.push({
       id: tag.id,
       class: tag.cls,
       state: tag.state ?? "default",
-      albedo_rgb: col.albedo.map((v) => r6(c01(v))) as Vec3,
-      emissive_rgb: col.emissive.map((v) => r6(Math.max(0, v))) as Vec3,
+      albedo_rgb: alb,
+      emissive_rgb: emi,
       screen_area: r6(area),
       bbox: { x: r6(cx0), y: r6(cy0), w: r6(cx1 - cx0), h: r6(cy1 - cy0) },
       depth: r6(Math.max(0, depth)),
       velocity: [r6(vel[0]), r6(vel[1])],
       task_tags: tag.tags ?? [],
+      lit_color: lit.map(r6) as Vec3,
+      normal: nA.map(r6) as Vec3,
+      position: pos.map(r6) as Vec3,
+      shadow_vis: vis,
     });
   }
   return {
@@ -136,7 +135,7 @@ export function exportSnapshot(scene: THREE.Scene, camera: THREE.PerspectiveCame
     frame: o.frame,
     t: r6(o.t),
     objects,
-    lighting: exportLighting(scene),
+    lighting,
     events: [],
     observer_id: o.observerId,
     budget_ms: o.budgetMs,

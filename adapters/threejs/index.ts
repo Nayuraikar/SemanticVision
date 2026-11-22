@@ -2,6 +2,7 @@ import type { Overrides, Snapshot } from "./protocol.gen";
 
 export * from "./protocol.gen";
 export * from "./snapshot";
+export * from "./lighting";
 export * from "./overrides";
 export * from "./gt";
 export * from "./toyScene";

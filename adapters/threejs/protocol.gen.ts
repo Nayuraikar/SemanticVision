@@ -7,6 +7,7 @@ export type AmbientDominantLighting = {
   "ambient_rgb": [number, number, number];
   "dominant_rgb": [number, number, number];
   "dominant_dir": [number, number, number];
+  "dominant_pos"?: [number, number, number] | null;
   "white_point"?: [number, number, number];
   "exposure"?: number;
 };
@@ -18,6 +19,13 @@ export type BBox = {
   "h": number;
 };
 
+export type DominantLight = {
+  "rgb": [number, number, number];
+  "direction": [number, number, number];
+  "position"?: [number, number, number] | null;
+  "ref_dist"?: number;
+};
+
 export type Event = {
   "type": "state_change" | "collision" | "enter_view" | "exit_view" | "lighting_change";
   "object_id"?: string | null;
@@ -27,6 +35,7 @@ export type Event = {
 export type SHLighting = {
   "kind"?: "sh2";
   "coeffs": Array<[number, number, number]>;
+  "dominant"?: DominantLight | null;
   "white_point"?: [number, number, number];
   "exposure"?: number;
 };
@@ -43,6 +52,9 @@ export type SceneObject = {
   "velocity"?: [number, number];
   "task_tags"?: Array<string>;
   "lit_color"?: [number, number, number] | null;
+  "normal"?: [number, number, number] | null;
+  "position"?: [number, number, number] | null;
+  "shadow_vis"?: number | null;
 };
 
 export type Snapshot = {

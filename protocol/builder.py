@@ -23,12 +23,13 @@ class SnapshotBuilder:
 
     def add_object(self, id, cls, albedo_rgb, bbox=(0, 0, 0.1, 0.1), screen_area=None,
                    depth=1.0, state="default", emissive_rgb=(0, 0, 0), velocity=(0, 0),
-                   task_tags=(), lit_color=None):
+                   task_tags=(), lit_color=None, normal=None, position=None, shadow_vis=None):
         b = BBox(x=bbox[0], y=bbox[1], w=bbox[2], h=bbox[3])
         self._objs.append(SceneObject(
             id=id, **{"class": cls}, state=state, albedo_rgb=albedo_rgb, emissive_rgb=emissive_rgb,
             screen_area=b.w * b.h if screen_area is None else screen_area, bbox=b, depth=depth,
-            velocity=velocity, task_tags=list(task_tags), lit_color=lit_color))
+            velocity=velocity, task_tags=list(task_tags), lit_color=lit_color,
+            normal=normal, position=position, shadow_vis=shadow_vis))
         return self
 
     def add_event(self, type, object_id=None, **data):

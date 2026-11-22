@@ -28,7 +28,13 @@ class Solution:
         return len(self.infeasible)
 
 
+def _late(deadline):
+    return deadline is not None and time.perf_counter() > deadline
+
+
 def coordinate_descent(pb: Problem, P0=None, deadline=None):
+    """Grid init + coordinate descent. `deadline` (perf_counter time) is checked before every candidate batch,
+    so the loop returns the best feasible palette found so far as soon as the budget is spent."""
     cfg = pb.cfg
     P = pb.lab0.copy() if P0 is None else pb.project(np.array(P0, float))
     cur = float(pb.objective(P[None])[0])
@@ -38,6 +44,8 @@ def coordinate_descent(pb: Problem, P0=None, deadline=None):
         off = np.stack(np.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3)
         for _ in range(cfg.sweeps):
             for e in act:
+                if _late(deadline):
+                    return P, cur
                 cand = np.repeat(P[None], len(off), 0)
                 cand[:, e] = pb.lab0[e] + off * pb.delta[e]
                 f = pb.objective(cand); i = int(np.argmax(f))
@@ -45,10 +53,12 @@ def coordinate_descent(pb: Problem, P0=None, deadline=None):
                     P, cur = pb.project(cand[i]), float(f[i])
     step = cfg.step0
     for _ in range(cfg.max_iter * 4):
-        if not len(act) or (deadline and time.perf_counter() > deadline):
+        if not len(act) or _late(deadline):
             break
         improved = False
         for e in act:
+            if _late(deadline):
+                return P, cur
             cand = np.repeat(P[None], 6, 0)
             for k in range(6):
                 cand[k, e, k // 2] += step * pb.delta[e] * (1 if k % 2 == 0 else -1)
@@ -89,9 +99,13 @@ def correct(scene: Scene, observers, cfg: SolverConfig = SolverConfig(), seed=0)
     """Primary solver + verification loop: re-check in screen space; failing pairs are boosted and the
     descent re-run (perturbed restart) within budget/retries; what is still confusable is escalated to cues."""
     t0 = time.perf_counter()
-    deadline = t0 + cfg.budget_ms / 1e3
+    hard = t0 + cfg.budget_ms / 1e3                      # whole call, incl. verification and packaging
     rng = np.random.default_rng([seed, 0xC0D])
     pb = Problem(scene, observers, cfg)
+    tc = time.perf_counter()
+    screen_check(scene, scene.colors, observers)         # also measures the verification cost to reserve for it
+    reserve = 1.5 * (time.perf_counter() - tc)
+    deadline = hard - reserve                            # descent stops here so verification still fits the budget
     P, obj = coordinate_descent(pb, deadline=deadline)
     best, att = None, 0
     for att in range(cfg.retries + 1):

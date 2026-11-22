@@ -6,6 +6,7 @@ import numpy as np
 from scipy.special import logsumexp
 from core.perception import color as C, distance as Dst
 from core.perception.graph import build_graph, bbox_adjacency
+from core.lighting import LightField, object_lit, shadow_state
 
 MEMORY_CLASSES = ("sky", "skin", "grass", "brand")
 
@@ -77,6 +78,12 @@ class Scene:
     adjacency: np.ndarray
     protected: np.ndarray         # (N,) bool memory colour
     far_weight: float = 0.0
+    illum_xyz: np.ndarray | None = None   # scene white point (Y=1) -> CAT16 before CVD; None = no adaptation
+    refl: np.ndarray | None = None        # (N,3) reflected part of the lit colour (HDR)
+    emis: np.ndarray | None = None        # (N,3) emitted part (HDR), added separately
+    gain: np.ndarray | None = None        # (N,3) irradiance * exposure
+    shadow: list | None = None            # (N,) lit|penumbra|shadow
+    exposure: float = 1.0
 
     @property
     def n_groups(self):
@@ -95,21 +102,59 @@ class Scene:
                    float(bg_lum), np.asarray(adjacency, bool), prot, far_weight)
 
     @classmethod
-    def from_snapshot(cls, snap, fov=60.0, adj_margin=0.3, far_weight=0.0, bg_lum=0.2, brand=None, **kw):
+    def from_snapshot(cls, snap, fov=60.0, adj_margin=0.3, far_weight=0.0, bg_lum=0.2, brand=None,
+                      lighting="lit", adapt=True, **kw):
+        """lighting: 'lit' (SH-L2 + shadow + emissive, canonical) | 'albedo' (legacy: albedo as colour).
+        adapt: CAT16 to the scene white point before CVD."""
         o = snap.objects
-        col = np.array([x.albedo_rgb for x in o], float)
+        fld = LightField.from_lighting(snap.lighting)
+        parts = [object_lit(fld, x) for x in o]
+        if lighting == "albedo":
+            col = np.array([x.albedo_rgb for x in o], float)
+        else:
+            col = np.array([p[0] for p in parts], float)
         bb = np.array([(x.bbox.x, x.bbox.y, x.bbox.w, x.bbox.h) for x in o], float)              # x,y,w,h
         xyxy = np.c_[bb[:, 0], bb[:, 1], bb[:, 0] + bb[:, 2], bb[:, 1] + bb[:, 3]]
         area = np.maximum(bb[:, 2] * bb[:, 3], 1e-6)
         imp = np.array([2.0 if "hazard" in x.task_tags else 1.0 for x in o])
-        return cls.build(col, [f"{x.cls}/{x.state}" for x in o], np.maximum(np.sqrt(area) * fov, 0.1), area,
-                         bbox_adjacency(xyxy, adj_margin), imp, bg_lum, [x.id for x in o],
-                         far_weight=far_weight, brand=brand, tags=[x.task_tags for x in o], **kw)
+        sc = cls.build(col, [f"{x.cls}/{x.state}" for x in o], np.maximum(np.sqrt(area) * fov, 0.1), area,
+                       bbox_adjacency(xyxy, adj_margin), imp, bg_lum, [x.id for x in o],
+                       far_weight=far_weight, brand=brand, tags=[x.task_tags for x in o], **kw)
+        if lighting != "albedo":
+            sc.refl, sc.emis = np.array([p[1] for p in parts]), np.array([p[2] for p in parts])
+            sc.gain = np.array([p[3] * fld.exposure for p in parts])
+            sc.shadow = [shadow_state(x.shadow_vis) for x in o]
+            sc.exposure = fld.exposure
+            if adapt:
+                sc.illum_xyz = fld.white_xyz()
+        return sc
+
+    def perceive_kw(self, obs):
+        """Perception kwargs for an observer: CVD model + CAT16 to the scene white point."""
+        kw = dict(obs.sim_kwargs())
+        if self.illum_xyz is not None:
+            kw["illum_xyz"] = self.illum_xyz
+        return kw
+
+    def to_overrides(self, colors):
+        """Corrected display colours (N,3) -> (albedo', emissive') per object, inverting the lit model:
+        emissive-dominated objects change their emission (never scaled by irradiance) and keep their albedo;
+        others change albedo and keep their emission. Without lighting info: (colors, None)."""
+        c = np.clip(np.asarray(colors, float), 0, 1)
+        if self.refl is None:
+            return c, None
+        yl = np.array([0.2126, 0.7152, 0.0722])
+        g = np.maximum(self.gain, 1e-9)
+        use_e = ((self.emis @ yl) > (self.refl @ yl))[:, None]
+        amp = np.maximum((self.emis @ yl) / np.maximum(np.minimum(self.emis, 1) @ yl, 1e-9), 1.0)[:, None]
+        alb = np.where(use_e, np.clip(self.refl / g, 0, 1), np.clip((c - self.emis) / g, 0, 1))
+        em = np.where(use_e, np.maximum(c - self.refl, 0) * amp / self.exposure, self.emis / self.exposure)
+        return alb, em
 
     def graph(self, obs, colors=None):
         return build_graph(self.colors if colors is None else colors, self.ids, self.size_deg, self.area,
                            self.importance, self.bg_lum, adjacency=self.adjacency, far_weight=self.far_weight,
-                           s_L=obs.s_L, s_C=obs.s_C, k=obs.k, **obs.sim_kwargs())
+                           s_L=obs.s_L, s_C=obs.s_C, k=obs.k, **self.perceive_kw(obs))
 
     def palette(self):
         """Group-level arrays: colour (area-weighted mean), min size, summed area, max importance, adjacency."""
@@ -139,7 +184,7 @@ class Problem:
         taus, W = [], None
         for o in self.obs:
             g = build_graph(col, None, sz, ar, im, scene.bg_lum, adjacency=adj, far_weight=scene.far_weight,
-                            s_L=o.s_L, s_C=o.s_C, k=o.k, **o.sim_kwargs())
+                            s_L=o.s_L, s_C=o.s_C, k=o.k, **scene.perceive_kw(o))
             taus.append(g.tau); W = g.weight
         iu = np.triu(W > 1e-9, 1)
         self.pairs = np.argwhere(iu)
@@ -201,7 +246,7 @@ class Problem:
         flat = self.to_rgb(X).reshape(-1, 3)
         out = []
         for m, o in enumerate(self.obs):
-            lab = C.linear_to_lab(Dst.perceived(flat, **o.sim_kwargs())).reshape(B, self.E, 3)
+            lab = C.linear_to_lab(Dst.perceived(flat, **self.scene.perceive_kw(o))).reshape(B, self.E, 3)
             D = C.ciede2000(lab[:, self.ia], lab[:, self.ib])
             out.append(np.minimum(D, self.cfg.cap * self.tau[m]))
         return np.concatenate(out, 1)

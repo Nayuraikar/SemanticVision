@@ -16,11 +16,12 @@ def naturalness(orig, new, protected=None):
                 mem_drift=float(d[p].mean()) if p.any() else 0.0, mem_max=float(d[p].max()) if p.any() else 0.0)
 
 
-def pair_scores(colors, obs, edges, tau):
+def pair_scores(colors, obs, edges, tau, illum_xyz=None):
     """Perceived dE00 and success (D >= tau) of the given pairs under observer obs. edges (E,2), tau (N,N)."""
     if not len(edges):
         return None
-    D = Dst.pair_matrix(np.asarray(colors, float), **obs.sim_kwargs())
+    kw = obs.sim_kwargs() if illum_xyz is None else dict(obs.sim_kwargs(), illum_xyz=illum_xyz)
+    D = Dst.pair_matrix(np.asarray(colors, float), **kw)
     d = D[edges[:, 0], edges[:, 1]]
     return dict(min=float(d.min()), mean=float(d.mean()), success=float(np.mean(d >= tau[edges[:, 0], edges[:, 1]])),
                 failing=int(np.sum(d < tau[edges[:, 0], edges[:, 1]])))

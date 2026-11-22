@@ -55,7 +55,7 @@ def run(params, seed):
                 continue
             for m in methods:
                 c, ms, extra = out[m][o.kind]
-                s = pair_scores(c, o, ed, g.tau)
+                s = pair_scores(c, o, ed, g.tau, scene.illum_xyz)
                 nat = naturalness(scene.colors, c, scene.protected)
                 for k, v in dict(min_de00=s["min"], mean_de00=s["mean"], success_rate=s["success"], infeasible=s["failing"],
                                  deviation=nat["max_de00"], naturalness=nat["mean_de00"], mem_drift=nat["mem_drift"],

@@ -57,9 +57,11 @@ def build_graph(colors, ids=None, size_deg=None, area=None, importance=None, bg_
     Dm = D.pair_matrix(c, space=space, **perceive_kw)
     pair_sz = np.minimum(sz[:, None], sz[None, :])
     pair_bg = 0.5 * (bg[:, None] + bg[None, :])
-    sL = np.broadcast_to(np.asarray(s_L, float), (N,)).min() if np.ndim(s_L) else s_L
-    sC = np.broadcast_to(np.asarray(s_C, float), (N,)).min() if np.ndim(s_C) else s_C
-    T = tau_fn(pair_sz, pair_bg, sL, sC, k, params)
+    # observer sensitivities: scalar (the observer's own) or per-node; per-pair value = mean of its two nodes
+    # (never a min over all nodes, which made every pair's tau depend on the most insensitive node)
+    sL = np.broadcast_to(np.asarray(s_L, float), (N,))
+    sC = np.broadcast_to(np.asarray(s_C, float), (N,))
+    T = tau_fn(pair_sz, pair_bg, 0.5 * (sL[:, None] + sL[None, :]), 0.5 * (sC[:, None] + sC[None, :]), k, params)
     sw = np.sqrt(ar[:, None] * ar[None, :]) / max(ar.max(), 1e-12)
     adjf = np.where(adj, 1.0, far_weight)
     W = adjf * sw * np.sqrt(imp[:, None] * imp[None, :])

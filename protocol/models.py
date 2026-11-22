@@ -42,6 +42,9 @@ class SceneObject(_Base):
     velocity: tuple[float, float] = (0.0, 0.0)
     task_tags: list[str] = Field(default_factory=list)
     lit_color: Optional[RGB] = None
+    normal: Optional[tuple[float, float, float]] = Field(None, description="world surface normal facing the camera")
+    position: Optional[tuple[float, float, float]] = Field(None, description="world position (same frame as lights)")
+    shadow_vis: Optional[float] = Field(None, ge=0, le=1, description="visibility of the dominant light (1 lit, 0 shadow)")
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -56,9 +59,26 @@ class SceneObject(_Base):
         return _check_rgb(v, allow_hdr=True)
 
 
+class DominantLight(_Base):
+    """Dominant (sun/lamp) term of the lighting. rgb = normalised irradiance on a surface facing it (lit = albedo*rgb*cos).
+    direction = direction towards the light (nominal); position set => point light, rgb is its value at ref_dist."""
+    rgb: RGB
+    direction: tuple[float, float, float]
+    position: Optional[tuple[float, float, float]] = None
+    ref_dist: float = Field(1.0, gt=0)
+
+    @field_validator("rgb")
+    @classmethod
+    def _hdr(cls, v):
+        return _check_rgb(v, allow_hdr=True)
+
+
 class SHLighting(_Base):
+    """coeffs: radiance SH-L2 (real basis, l<=2) of ALL lighting incl. the dominant term. Normalised diffuse
+    irradiance E(n) = sum_l (1, 2/3, 1/4)_l c_lm Y_lm(n); lit = albedo*E*exposure + emissive*exposure."""
     kind: Literal["sh2"] = "sh2"
     coeffs: list[RGB] = Field(min_length=9, max_length=9, description="9 SH-L2 coeffs x RGB")
+    dominant: Optional[DominantLight] = None
     white_point: tuple[float, float, float] = (0.9505, 1.0, 1.089)  # XYZ, D65
     exposure: float = Field(1.0, gt=0)
 
@@ -68,6 +88,7 @@ class AmbientDominantLighting(_Base):
     ambient_rgb: RGB
     dominant_rgb: RGB
     dominant_dir: tuple[float, float, float]
+    dominant_pos: Optional[tuple[float, float, float]] = None
     white_point: tuple[float, float, float] = (0.9505, 1.0, 1.089)
     exposure: float = Field(1.0, gt=0)
 
