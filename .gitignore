@@ -7,3 +7,4 @@ bench/logs/
 bench/results/
 .DS_Store
 build/
+viewer/dist/
