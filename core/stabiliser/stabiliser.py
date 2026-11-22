@@ -239,7 +239,10 @@ class Stabiliser:
         diag = Diagnostics(stage_latency_ms=dict(base.diagnostics.stage_latency_ms) if solve else {},
                            solver_tier=base.diagnostics.solver_tier if solve else "cached",
                            fallback_flags=list(base.diagnostics.fallback_flags),
-                           triggers=list(triggers), slew_clamped=clamped)
+                           triggers=list(triggers), slew_clamped=clamped,
+                           tier_counts=dict(base.diagnostics.tier_counts) if solve else {},
+                           allocator_ms=base.diagnostics.allocator_ms if solve else 0.0,
+                           entering=list(base.diagnostics.entering) if solve else [])
         keep = set(ids)
         out = Overrides(frame=f, palette_overrides=po,
                         cues=[k for i, k in (front.cues.items() if front else []) if i in keep],

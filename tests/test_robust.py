@@ -95,7 +95,7 @@ def test_server_robust_flag_profile(tmp_path):
         dt = (time.perf_counter() - t) * 1e3
         assert r.status_code == 200, r.text
         ov = Overrides.model_validate(r.json())
-        assert ov.diagnostics.solver_tier == "exact" and dt < 2000 * 1.5
+        assert ov.diagnostics.solver_tier in ("exact", "allocated") and dt < 2000 * 1.5
         res[mode] = [tuple(x.albedo) for x in ov.palette_overrides]
     assert res["cvar"] != res["point"] or res["worst"] != res["point"]    # flag changes the solve
     with pytest.raises(ValueError):

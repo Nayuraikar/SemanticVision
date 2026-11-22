@@ -1,0 +1,2 @@
+{"name": "allocator_scaling", "experiment": "allocator_scaling", "n_seeds": 12, "baseline": "greedy|n200|f0.25",
+ "params": {"sizes": [50, 200, 1000, 5000], "fracs": [0.1, 0.25, 0.5], "abs_ms": [33, 100], "bnb_max": 50}}

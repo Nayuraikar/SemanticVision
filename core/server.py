@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from calibration.session import CalibConfig, Session
 from core.observers import Observer, heldout_observers, train_observers
 from core.profiles import PROFILE_PREFIX, ProfileStore, profile_observer, samples_to_observers
+from core.allocator import Allocator, EntryPredictor
+from core.importance import Tracker, load_scorer
 from core.solver.problem import Scene, SolverConfig
 from core.stabiliser import Analysis, StabConfig, Stabiliser
 from core.solver.solver import correct as solver_correct
@@ -90,7 +92,8 @@ def pair_ratios(scene: Scene, observers: list[Observer]) -> Analysis:
 
 def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: dict | None = None,
           posterior: list[Observer] | None = None, risk: str = "point", scene_kw: dict | None = None,
-          info: dict | None = None) -> Overrides:
+          info: dict | None = None, alloc: Allocator | None = None, importance=None,
+          entering: dict | None = None) -> Overrides:
     """posterior + risk in (cvar, worst): optimise the risk measure over the posterior observers; the reported
     confusion pairs stay under `obs` (the posterior mean). info (out-param): 'analysis' -> stabiliser Analysis."""
     t0 = time.perf_counter()
@@ -98,12 +101,20 @@ def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: 
     if not snap.objects:
         return Overrides(frame=snap.frame, diagnostics=Diagnostics(stage_latency_ms={"total": 0.0}, solver_tier="none"))
     scene = Scene.from_snapshot(snap, **(scene_kw or {}))
+    if alloc is not None:
+        if importance is not None:
+            scene.importance = np.asarray(importance, float)
+        scene = Allocator.with_entering(scene, snap, entering or {}, (scene_kw or {}).get("adj_margin", 0.3))
     t1 = time.perf_counter(); lat["scene"] = (t1 - t0) * 1e3
     robust = bool(posterior) and risk in ("cvar", "worst")
     cfg = SolverConfig(budget_ms=float(snap.budget_ms), **{**LIVE_CFG, **(cfg_extra or {})},
                        **(dict(risk=risk) if robust else {}))
     sobs = posterior if robust else solver_observers(obs, table)
-    sol = solver_correct(scene, sobs, cfg, seed=0)
+    ainfo = None
+    if alloc is not None:
+        sol, ainfo = alloc.solve(scene, sobs, cfg, seed=0, t_start=t0)
+    else:
+        sol = solver_correct(scene, sobs, cfg, seed=0)
     t2 = time.perf_counter(); lat["solve"] = (t2 - t1) * 1e3
     g0, g1 = scene.graph(obs), scene.graph(obs, sol.colors)
     D1 = g1.D
@@ -126,14 +137,17 @@ def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: 
         info["analysis"] = an
     lat["total"] = (time.perf_counter() - t0) * 1e3
     return Overrides(frame=snap.frame, palette_overrides=po, cues=cues, confusion_pairs=pairs,
-                     diagnostics=Diagnostics(stage_latency_ms=lat, solver_tier="exact", fallback_flags=flags))
+                     diagnostics=Diagnostics(stage_latency_ms=lat, solver_tier="allocated" if ainfo else "exact",
+                                             fallback_flags=flags, tier_counts=ainfo["tier_counts"] if ainfo else {},
+                                             allocator_ms=ainfo["alloc_ms"] if ainfo else 0.0, entering=sorted(entering or {})))
 
 
 class Corrector:
     """Signature-cached live corrector: re-solves only when the scene/observer signature changes
     (or every `resolve_every` frames; 0 = never)."""
 
-    def __init__(self, resolve_every: int = 0, max_cache: int = 64, robust: str = "point"):
+    def __init__(self, resolve_every: int = 0, max_cache: int = 64, robust: str = "point", allocate: bool = True,
+                 max_trackers: int = 64):
         if robust not in ROBUST_MODES:
             raise ValueError(f"robust must be one of {ROBUST_MODES}")
         self.robust = robust                  # profile observers: point (posterior mean) | cvar | worst
@@ -143,6 +157,27 @@ class Corrector:
         self.solves = 0
         self.cfg_extra: dict = {}
         self.scene_kw: dict = {}
+        self.allocator = Allocator() if allocate else None     # budgeted tiers per palette group (SPEC 5.8)
+        self.scorer = load_scorer()                           # MLP if it beat the rules on held-out scenes, else rules
+        self.trackers: OrderedDict = OrderedDict()
+        self.max_trackers = max_trackers
+
+    def _track(self, snap: Snapshot):
+        """Per-session importance tracker + entry predictor, updated once per frame -> (importance (N,), entering boxes)."""
+        sid = snap.session_id
+        ent = self.trackers.get(sid) if sid else None
+        if ent is None:
+            ent = {"trk": Tracker(), "pred": EntryPredictor(), "key": None, "res": None}
+            if sid:
+                self.trackers[sid] = ent
+                while len(self.trackers) > self.max_trackers:
+                    self.trackers.popitem(last=False)
+        key = (snap.frame, snap.t, len(snap.objects))
+        if ent["key"] != key:
+            X, _ = ent["trk"].update(snap)
+            imp = 0.5 + 1.5 * np.asarray(self.scorer(X), float) if len(X) else np.zeros(0)
+            ent["res"], ent["key"] = (imp, ent["pred"].update(snap)), key
+        return ent["res"]
 
     def _obs(self, snap: Snapshot, observer: Observer | None) -> Observer:
         obs = observer or self.table.get(snap.observer_id)
@@ -155,6 +190,8 @@ class Corrector:
         obs = self._obs(snap, observer)
         if not snap.objects:
             return Analysis()
+        if self.allocator is not None:
+            self._track(snap)
         sobs = posterior if posterior and self.robust != "point" else solver_observers(obs, self.table)
         return pair_ratios(Scene.from_snapshot(snap, **self.scene_kw), sobs)
 
@@ -177,7 +214,8 @@ class Corrector:
             return hit[1].model_copy(update={"frame": snap.frame, "diagnostics": Diagnostics(
                 stage_latency_ms=lat, solver_tier="cached", fallback_flags=d.fallback_flags)}), hit[2]
         info: dict = {}
-        ov = solve(snap, obs, self.table, self.cfg_extra, posterior, risk, self.scene_kw, info)
+        imp, ent = self._track(snap) if self.allocator is not None and snap.objects else (None, None)
+        ov = solve(snap, obs, self.table, self.cfg_extra, posterior, risk, self.scene_kw, info, self.allocator, imp, ent)
         self.solves += 1
         an = info.get("analysis") or Analysis()
         self.cache[sig] = (snap.frame, ov, an)

@@ -1,0 +1,2 @@
+{"name": "allocator_bandit", "experiment": "allocator_bandit", "n_seeds": 16, "baseline": "static|shift",
+ "params": {"n": 200, "episodes": 30, "frac": 0.25, "alpha": 1.0, "decay": 0.95}}

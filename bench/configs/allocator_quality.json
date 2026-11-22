@@ -1,0 +1,2 @@
+{"name": "allocator_quality", "experiment": "allocator_quality", "n_seeds": 8, "baseline": "greedy|f0.3",
+ "params": {"n_objects": 30, "n_scenes": 1, "fracs": [0.15, 0.3, 0.6], "kinds": ["protan", "deutan"], "n_heldout": 12}}

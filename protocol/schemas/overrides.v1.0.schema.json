@@ -88,7 +88,8 @@
             "learned",
             "cached",
             "fallback",
-            "none"
+            "none",
+            "allocated"
           ],
           "title": "Solver Tier",
           "type": "string"
@@ -126,6 +127,29 @@
           ],
           "default": null,
           "title": "Session Id"
+        },
+        "tier_counts": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "description": "palette groups per allocator tier (skip/reuse/learned/coarse/fine)",
+          "title": "Tier Counts",
+          "type": "object"
+        },
+        "allocator_ms": {
+          "default": 0.0,
+          "description": "allocator's own latency (features + MCKP), inside stage_latency_ms.solve",
+          "minimum": 0,
+          "title": "Allocator Ms",
+          "type": "number"
+        },
+        "entering": {
+          "description": "object ids predicted to enter view (correction precomputed)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Entering",
+          "type": "array"
         }
       },
       "title": "Diagnostics",

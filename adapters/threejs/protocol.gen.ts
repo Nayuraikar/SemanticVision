@@ -84,11 +84,14 @@ export type Cue = {
 
 export type Diagnostics = {
   "stage_latency_ms"?: Record<string, number>;
-  "solver_tier"?: "exact" | "learned" | "cached" | "fallback" | "none";
+  "solver_tier"?: "exact" | "learned" | "cached" | "fallback" | "none" | "allocated";
   "fallback_flags"?: Array<string>;
   "triggers"?: Array<string>;
   "slew_clamped"?: number;
   "session_id"?: string | null;
+  "tier_counts"?: Record<string, number>;
+  "allocator_ms"?: number;
+  "entering"?: Array<string>;
 };
 
 export type PaletteOverride = {

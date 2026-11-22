@@ -9,7 +9,7 @@ SCHEMA_VERSION = "1.0"
 RGB = Annotated[tuple[float, float, float], Field(description="linear RGB in [0,1]")]
 EventType = Literal["state_change", "collision", "enter_view", "exit_view", "lighting_change"]
 CueType = Literal["outline", "hatch", "icon", "label"]
-SolverTier = Literal["exact", "learned", "cached", "fallback", "none"]
+SolverTier = Literal["exact", "learned", "cached", "fallback", "none", "allocated"]
 
 
 class _Base(BaseModel):
@@ -194,6 +194,9 @@ class Diagnostics(_Base):
     triggers: list[str] = Field(default_factory=list, description="recompute triggers that fired this frame")
     slew_clamped: int = Field(0, ge=0, description="palette channels clamped by the slew limiter this frame")
     session_id: Optional[str] = None
+    tier_counts: dict[str, int] = Field(default_factory=dict, description="palette groups per allocator tier (skip/reuse/learned/coarse/fine)")
+    allocator_ms: float = Field(0.0, ge=0, description="allocator's own latency (features + MCKP), inside stage_latency_ms.solve")
+    entering: list[str] = Field(default_factory=list, description="object ids predicted to enter view (correction precomputed)")
 
     @field_validator("stage_latency_ms")
     @classmethod

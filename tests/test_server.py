@@ -53,7 +53,7 @@ def _infeasible_snap() -> Snapshot:
 def test_real_solver_diagnostics_and_cues(client):
     synth = next(iter(generate(SynthConfig(n_objects=8, n_frames=1), seed=2)))
     ov = _post(client, synth)
-    assert ov.diagnostics.solver_tier == "exact"
+    assert ov.diagnostics.solver_tier in ("exact", "allocated")
     assert {"scene", "solve", "pairs_cues", "total"} <= set(ov.diagnostics.stage_latency_ms)
     assert any(p.albedo != o.albedo_rgb for p, o in zip(ov.palette_overrides, synth.objects))
     for cp in ov.confusion_pairs:

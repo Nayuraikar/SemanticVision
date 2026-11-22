@@ -242,16 +242,19 @@ class Problem:
         return np.clip(self._rgb(lab), 0, 1)
 
     # --- objective ---------------------------------------------------------------------------
-    def separation_tensor(self, X):
-        """X (B,E,3) projected Lab -> capped distances (B, M, P) under each observer's CVD + threshold."""
+    def distance_tensor(self, X):
+        """X (B,E,3) projected Lab -> uncapped perceived dE00 (B, M, P) under each observer's CVD."""
         B = X.shape[0]
         flat = self.to_rgb(X).reshape(-1, 3)
         out = []
-        for m, o in enumerate(self.obs):
+        for o in self.obs:
             lab = C.linear_to_lab(Dst.perceived(flat, **self.scene.perceive_kw(o))).reshape(B, self.E, 3)
-            D = C.ciede2000(lab[:, self.ia], lab[:, self.ib])
-            out.append(np.minimum(D, self.cfg.cap * self.tau[m]))
+            out.append(C.ciede2000(lab[:, self.ia], lab[:, self.ib]))
         return np.stack(out, 1)
+
+    def separation_tensor(self, X):
+        """X (B,E,3) projected Lab -> capped distances (B, M, P) under each observer's CVD + threshold."""
+        return np.minimum(self.distance_tensor(X), self.cfg.cap * self.tau[None])
 
     def separation_terms(self, X):
         """-> (B, M*P) pooled over observers."""

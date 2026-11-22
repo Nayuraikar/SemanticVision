@@ -1,0 +1,2 @@
+{"name": "allocator_predictor", "experiment": "allocator_predictor", "n_seeds": 16, "baseline": "none",
+ "params": {"n_objects": 20, "n_frames": 300, "motion": 0.3, "horizon": 0.5}}

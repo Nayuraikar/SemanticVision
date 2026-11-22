@@ -1,0 +1,2 @@
+{"name": "importance_eval", "experiment": "importance_eval", "n_seeds": 12, "baseline": "rules",
+ "params": {"n_train": 14, "n_test": 10}}

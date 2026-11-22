@@ -256,7 +256,7 @@ def test_correct_with_profile_observer(client):
     r = post(f"profile:{pid}")
     assert r.status_code == 200, r.text
     ov = Overrides.model_validate(r.json())
-    assert ov.frame == snap.frame and ov.diagnostics.solver_tier == "exact"
+    assert ov.frame == snap.frame and ov.diagnostics.solver_tier in ("exact", "allocated")
     assert post(f"profile:{pid}").json()["diagnostics"]["solver_tier"] == "cached"
     assert post("profile:missing").status_code == 404
 

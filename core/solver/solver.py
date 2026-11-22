@@ -32,14 +32,14 @@ def _late(deadline):
     return deadline is not None and time.perf_counter() > deadline
 
 
-def coordinate_descent(pb: Problem, P0=None, deadline=None):
+def coordinate_descent(pb: Problem, P0=None, deadline=None, act=None, cfg=None, init_grid=None):
     """Grid init + coordinate descent. `deadline` (perf_counter time) is checked before every candidate batch,
     so the loop returns the best feasible palette found so far as soon as the budget is spent."""
-    cfg = pb.cfg
+    cfg = cfg or pb.cfg
     P = pb.lab0.copy() if P0 is None else pb.project(np.array(P0, float))
     cur = float(pb.objective(P[None])[0])
-    act = np.flatnonzero(pb.active)
-    if P0 is None and len(act):
+    act = np.flatnonzero(pb.active) if act is None else np.asarray(act, int)   # act: optimise only these entries
+    if (P0 is None if init_grid is None else init_grid) and len(act):
         g = np.linspace(-1, 1, cfg.grid)
         off = np.stack(np.meshgrid(g, g, g, indexing="ij"), -1).reshape(-1, 3)
         for _ in range(cfg.sweeps):
