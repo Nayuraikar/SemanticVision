@@ -19,7 +19,11 @@ def client(tmp_path):
     return TestClient(create_app(gt_dir=tmp_path / "gt"))
 
 
-def _post(client, snap: Snapshot) -> Overrides:
+OBS = "tr-0-000"
+
+
+def _post(client, snap: Snapshot, obs=OBS) -> Overrides:
+    snap = snap.model_copy(update={"observer_id": obs})
     r = client.post("/correct", content=snap.model_dump_json(by_alias=True), headers={"content-type": "application/json"})
     assert r.status_code == 200, r.text
     ov = Overrides.model_validate(r.json())
@@ -36,6 +40,51 @@ def test_toy_and_synthetic_same_endpoint(client):
     for s in toy + synth:
         ov = _post(client, s)
         assert len(ov.palette_overrides) == len(s.objects)
+
+
+def _infeasible_snap() -> Snapshot:
+    snap = next(iter(generate(SynthConfig(n_objects=4, n_frames=1), seed=1)))
+    bb = snap.objects[0].bbox
+    o = [x.model_copy(update={"cls": c, "albedo_rgb": (0.2, 0.3, 0.2), "bbox": bb.model_copy(update={"x": 0.4 + 0.1 * i, "y": 0.4, "w": 0.1, "h": 0.1})})
+         for i, (x, c) in enumerate(zip(snap.objects[:2], ("sky", "grass")))]
+    return snap.model_copy(update={"objects": o})
+
+
+def test_real_solver_diagnostics_and_cues(client):
+    synth = next(iter(generate(SynthConfig(n_objects=8, n_frames=1), seed=2)))
+    ov = _post(client, synth)
+    assert ov.diagnostics.solver_tier == "exact"
+    assert {"scene", "solve", "pairs_cues", "total"} <= set(ov.diagnostics.stage_latency_ms)
+    assert any(p.albedo != o.albedo_rgb for p, o in zip(ov.palette_overrides, synth.objects))
+    for cp in ov.confusion_pairs:
+        assert cp.de00_before >= 0 and cp.de00_after >= 0
+    snap = _infeasible_snap()
+    client.app.state.corrector.cfg_extra = {"delta_mem": 0.0}   # memory colours frozen -> pair cannot be separated
+    ov = _post(client, snap, "he-0-000")  # held-out observer id is accepted
+    bad = [p for p in ov.confusion_pairs if not p.feasible]
+    assert bad and ov.cues and {c.id for c in ov.cues} <= {o.id for o in snap.objects}
+    assert "infeasible_pairs" in ov.diagnostics.fallback_flags
+
+
+def test_cache_by_signature(client):
+    snaps = list(generate(SynthConfig(n_objects=6, n_frames=1), seed=3))
+    s = snaps[0]
+    a = _post(client, s)
+    n = client.app.state.corrector.solves
+    b = _post(client, s.model_copy(update={"frame": 5}))
+    assert client.app.state.corrector.solves == n and b.diagnostics.solver_tier == "cached" and b.frame == 5
+    assert [p.albedo for p in b.palette_overrides] == [p.albedo for p in a.palette_overrides]
+    _post(client, s, "tr-0-001")
+    assert client.app.state.corrector.solves == n + 1
+
+
+def test_observers_listing_and_unknown(client):
+    r = client.get("/observers").json()
+    assert r["train"] and r["heldout"] and all(o["split"] == "heldout" for o in r["heldout"])
+    assert {o["id"] for o in r["train"]}.isdisjoint(o["id"] for o in r["heldout"])
+    snap = next(iter(generate(SynthConfig(n_objects=3, n_frames=1), seed=0)))
+    assert client.post("/correct", content=snap.model_copy(update={"observer_id": "nope"}).model_dump_json(by_alias=True),
+                       headers={"content-type": "application/json"}).status_code == 404
 
 
 def test_rejects_invalid_snapshot(client):
