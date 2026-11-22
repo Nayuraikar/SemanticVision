@@ -130,6 +130,7 @@ class Snapshot(_Base):
     events: list[Event] = Field(default_factory=list)
     observer_id: str = Field(min_length=1)
     budget_ms: float = Field(gt=0)
+    session_id: Optional[str] = Field(None, min_length=1, max_length=128, description="stabiliser session; omitted = new session")
 
     @field_validator("schema_version")
     @classmethod
@@ -190,6 +191,9 @@ class Diagnostics(_Base):
     stage_latency_ms: dict[str, float] = Field(default_factory=dict)
     solver_tier: SolverTier = "none"
     fallback_flags: list[str] = Field(default_factory=list)
+    triggers: list[str] = Field(default_factory=list, description="recompute triggers that fired this frame")
+    slew_clamped: int = Field(0, ge=0, description="palette channels clamped by the slew limiter this frame")
+    session_id: Optional[str] = None
 
     @field_validator("stage_latency_ms")
     @classmethod

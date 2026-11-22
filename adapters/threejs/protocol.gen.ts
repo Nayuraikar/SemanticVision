@@ -66,6 +66,7 @@ export type Snapshot = {
   "events"?: Array<Event>;
   "observer_id": string;
   "budget_ms": number;
+  "session_id"?: string | null;
 };
 
 export type ConfusionPair = {
@@ -85,6 +86,9 @@ export type Diagnostics = {
   "stage_latency_ms"?: Record<string, number>;
   "solver_tier"?: "exact" | "learned" | "cached" | "fallback" | "none";
   "fallback_flags"?: Array<string>;
+  "triggers"?: Array<string>;
+  "slew_clamped"?: number;
+  "session_id"?: string | null;
 };
 
 export type PaletteOverride = {

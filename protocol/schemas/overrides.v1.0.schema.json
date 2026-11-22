@@ -99,6 +99,33 @@
           },
           "title": "Fallback Flags",
           "type": "array"
+        },
+        "triggers": {
+          "description": "recompute triggers that fired this frame",
+          "items": {
+            "type": "string"
+          },
+          "title": "Triggers",
+          "type": "array"
+        },
+        "slew_clamped": {
+          "default": 0,
+          "description": "palette channels clamped by the slew limiter this frame",
+          "minimum": 0,
+          "title": "Slew Clamped",
+          "type": "integer"
+        },
+        "session_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Session Id"
         }
       },
       "title": "Diagnostics",

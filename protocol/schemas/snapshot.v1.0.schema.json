@@ -616,6 +616,21 @@
       "exclusiveMinimum": 0,
       "title": "Budget Ms",
       "type": "number"
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "stabiliser session; omitted = new session",
+      "title": "Session Id"
     }
   },
   "required": [

@@ -1,0 +1,4 @@
+{"name": "stability_ablation", "experiment": "stability_ablation", "n_seeds": 16, "baseline": "none",
+ "params": {"split": "heldout", "stream": {"n_frames": 120}, "n_train": 3, "n_heldout": 6, "window": 20,
+            "compute_frames": 1,
+            "solver": {"step_min": 0.1, "retries": 0}, "workers": 8}}

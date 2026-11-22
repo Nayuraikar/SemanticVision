@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -20,6 +21,7 @@ from calibration.session import CalibConfig, Session
 from core.observers import Observer, heldout_observers, train_observers
 from core.profiles import PROFILE_PREFIX, ProfileStore, profile_observer, samples_to_observers
 from core.solver.problem import Scene, SolverConfig
+from core.stabiliser import Analysis, StabConfig, Stabiliser
 from core.solver.solver import correct as solver_correct
 from protocol.models import ConfusionPair, Cue, Diagnostics, Overrides, PaletteOverride, Snapshot
 
@@ -73,20 +75,35 @@ ROBUST_MODES = ("point", "cvar", "worst")
 POSTERIOR_M = 6      # posterior samples in the live solve (latency scales ~M)
 
 
+def pair_ratios(scene: Scene, observers: list[Observer]) -> Analysis:
+    """Stabiliser view: dE00/tau of adjacent cross-group pairs on the ORIGINAL lit colours, min over the solver's
+    observers (never the scoring observer); palette group per object id."""
+    r: dict = {}
+    for o in observers:
+        g = scene.graph(o)
+        for i, j in np.argwhere(np.triu(g.weight > 1e-9, 1)):
+            if scene.groups[i] != scene.groups[j]:
+                k = tuple(sorted((scene.ids[i], scene.ids[j])))
+                r[k] = min(r.get(k, np.inf), float(g.D[i, j] / max(g.tau[i, j], 1e-9)))
+    return Analysis(r, {i: int(g) for i, g in zip(scene.ids, scene.groups)})
+
+
 def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: dict | None = None,
-          posterior: list[Observer] | None = None, risk: str = "point") -> Overrides:
+          posterior: list[Observer] | None = None, risk: str = "point", scene_kw: dict | None = None,
+          info: dict | None = None) -> Overrides:
     """posterior + risk in (cvar, worst): optimise the risk measure over the posterior observers; the reported
-    confusion pairs stay under `obs` (the posterior mean)."""
+    confusion pairs stay under `obs` (the posterior mean). info (out-param): 'analysis' -> stabiliser Analysis."""
     t0 = time.perf_counter()
     lat: dict[str, float] = {}
     if not snap.objects:
         return Overrides(frame=snap.frame, diagnostics=Diagnostics(stage_latency_ms={"total": 0.0}, solver_tier="none"))
-    scene = Scene.from_snapshot(snap)
+    scene = Scene.from_snapshot(snap, **(scene_kw or {}))
     t1 = time.perf_counter(); lat["scene"] = (t1 - t0) * 1e3
     robust = bool(posterior) and risk in ("cvar", "worst")
     cfg = SolverConfig(budget_ms=float(snap.budget_ms), **{**LIVE_CFG, **(cfg_extra or {})},
                        **(dict(risk=risk) if robust else {}))
-    sol = solver_correct(scene, posterior if robust else solver_observers(obs, table), cfg, seed=0)
+    sobs = posterior if robust else solver_observers(obs, table)
+    sol = solver_correct(scene, sobs, cfg, seed=0)
     t2 = time.perf_counter(); lat["solve"] = (t2 - t1) * 1e3
     g0, g1 = scene.graph(obs), scene.graph(obs, sol.colors)
     D1 = g1.D
@@ -103,6 +120,10 @@ def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: 
                           emissive=o.emissive_rgb if em is None else tuple(float(x) for x in em[i]))
           for i, o in enumerate(snap.objects)]
     flags = (["cue_unresolved"] if sol.cue_unresolved else []) + (["infeasible_pairs"] if sol.infeasible_ids else [])
+    if info is not None:
+        an = pair_ratios(scene, sobs)
+        an.cue_pairs = {tuple(sorted(p)) for p in sol.infeasible_ids}
+        info["analysis"] = an
     lat["total"] = (time.perf_counter() - t0) * 1e3
     return Overrides(frame=snap.frame, palette_overrides=po, cues=cues, confusion_pairs=pairs,
                      diagnostics=Diagnostics(stage_latency_ms=lat, solver_tier="exact", fallback_flags=flags))
@@ -118,16 +139,32 @@ class Corrector:
         self.robust = robust                  # profile observers: point (posterior mean) | cvar | worst
         self.table = observer_table()
         self.resolve_every, self.max_cache = resolve_every, max_cache
-        self.cache: OrderedDict[str, tuple[int, Overrides]] = OrderedDict()
+        self.cache: OrderedDict[str, tuple[int, Overrides, Analysis]] = OrderedDict()
         self.solves = 0
         self.cfg_extra: dict = {}
+        self.scene_kw: dict = {}
 
-    def __call__(self, snap: Snapshot, observer: Observer | None = None, posterior: list[Observer] | None = None) -> Overrides:
-        """observer: explicit (e.g. profile posterior mean); else looked up by snap.observer_id in the fixed pool.
-        posterior: M posterior-sample observers, used when self.robust is cvar|worst."""
+    def _obs(self, snap: Snapshot, observer: Observer | None) -> Observer:
         obs = observer or self.table.get(snap.observer_id)
         if obs is None:
             raise KeyError(snap.observer_id)
+        return obs
+
+    def analyse(self, snap: Snapshot, observer: Observer | None = None, posterior: list[Observer] | None = None) -> Analysis:
+        """Cheap monitor (no solve): pair ratios on the original colours under the solver's observers."""
+        obs = self._obs(snap, observer)
+        if not snap.objects:
+            return Analysis()
+        sobs = posterior if posterior and self.robust != "point" else solver_observers(obs, self.table)
+        return pair_ratios(Scene.from_snapshot(snap, **self.scene_kw), sobs)
+
+    def __call__(self, snap: Snapshot, observer: Observer | None = None, posterior: list[Observer] | None = None) -> Overrides:
+        return self.run(snap, observer, posterior)[0]
+
+    def run(self, snap: Snapshot, observer: Observer | None = None, posterior: list[Observer] | None = None):
+        """-> (Overrides, Analysis). observer: explicit (e.g. profile posterior mean); else looked up by
+        snap.observer_id in the fixed pool. posterior: M posterior-sample observers, used when robust is cvar|worst."""
+        obs = self._obs(snap, observer)
         risk = self.robust if posterior else "point"
         t0 = time.perf_counter()
         sig = signature(snap, (repr(obs.to_dict()) + risk + repr([o.to_dict() for o in posterior or []])
@@ -138,13 +175,35 @@ class Corrector:
             d = hit[1].diagnostics
             lat = {"total": (time.perf_counter() - t0) * 1e3}
             return hit[1].model_copy(update={"frame": snap.frame, "diagnostics": Diagnostics(
-                stage_latency_ms=lat, solver_tier="cached", fallback_flags=d.fallback_flags)})
-        ov = solve(snap, obs, self.table, self.cfg_extra, posterior, risk)
+                stage_latency_ms=lat, solver_tier="cached", fallback_flags=d.fallback_flags)}), hit[2]
+        info: dict = {}
+        ov = solve(snap, obs, self.table, self.cfg_extra, posterior, risk, self.scene_kw, info)
         self.solves += 1
-        self.cache[sig] = (snap.frame, ov)
+        an = info.get("analysis") or Analysis()
+        self.cache[sig] = (snap.frame, ov, an)
         while len(self.cache) > self.max_cache:
             self.cache.popitem(last=False)
-        return ov
+        return ov, an
+
+
+class StabSessions:
+    """Per-session stabiliser state keyed by session_id (LRU-bounded). Unknown/absent id = new session."""
+
+    def __init__(self, cfg: StabConfig | None, max_sessions: int = 64):
+        self.cfg, self.max = cfg, max_sessions
+        self.live: OrderedDict[str, tuple[Stabiliser, threading.Lock]] = OrderedDict()
+        self.lock = threading.Lock()
+
+    def get(self, sid: str | None):
+        with self.lock:
+            sid = sid or uuid.uuid4().hex[:16]
+            ent = self.live.get(sid)
+            if ent is None:
+                ent = self.live[sid] = (Stabiliser(self.cfg), threading.Lock())
+                while len(self.live) > self.max:
+                    self.live.popitem(last=False)
+            self.live.move_to_end(sid)
+            return sid, ent[0], ent[1]
 
 
 class SelfReportIn(BaseModel):
@@ -188,7 +247,7 @@ class Sessions:
 
 
 def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0, profiles_db: Path | str | None = None,
-               robust: str | None = None) -> FastAPI:
+               robust: str | None = None, stab: StabConfig | None = None) -> FastAPI:
     app = FastAPI(title="SemanticVision core")
     app.add_middleware(CORSMiddleware, allow_origins=DEV_ORIGINS, allow_methods=["*"], allow_headers=["*"])
     out_dir = Path(gt_dir or os.environ.get("SV_GT_DIR") or GT_DIR)
@@ -209,18 +268,29 @@ def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0, profile
     sessions = Sessions(store)
     app.state.profiles, app.state.sessions = store, sessions
 
+    stab_sessions = StabSessions(stab or StabConfig.all_on())
+    app.state.stab_sessions = stab_sessions
+
     @app.post("/correct", response_model=Overrides)
     def post_correct(snap: Snapshot) -> Overrides:
+        """Stabilised overrides. session_id (optional) keys the stabiliser state; omitted = new session whose id is
+        returned in diagnostics.session_id (a stateless call is simply a one-frame session)."""
         try:
+            obs, post = None, None
             if snap.observer_id.startswith(PROFILE_PREFIX):
                 pid = snap.observer_id[len(PROFILE_PREFIX):]
                 prof = store.get(pid)
                 if prof is None:
                     raise KeyError(pid)
+                obs = profile_observer(pid, prof["summary"])
                 post = (samples_to_observers(prof["samples"], POSTERIOR_M, pid)
                         if corrector.robust != "point" and prof.get("samples") else None)
-                return corrector(snap, profile_observer(pid, prof["summary"]), post)
-            return corrector(snap)
+            corrector._obs(snap, obs)                      # KeyError -> 404 before a session is created
+            sid, st, lock = stab_sessions.get(snap.session_id)
+            with lock:
+                res = st.step(snap, lambda s: corrector.run(s, obs, post), lambda s: corrector.analyse(s, obs, post))
+            res.overrides.diagnostics.session_id = sid
+            return res.overrides
         except KeyError:
             raise HTTPException(404, f"unknown observer_id {snap.observer_id}")
 
