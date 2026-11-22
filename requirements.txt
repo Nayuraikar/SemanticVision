@@ -1,0 +1,14 @@
+numpy
+scipy
+opencv-python
+colour-science
+torch
+onnx
+onnxruntime
+fastapi
+uvicorn
+pydantic
+pytest
+matplotlib
+pandas
+httpx

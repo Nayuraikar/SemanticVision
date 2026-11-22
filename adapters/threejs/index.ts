@@ -14,3 +14,4 @@ export async function postCorrect(baseUrl: string, snap: Snapshot): Promise<Over
   if (!r.ok) throw new Error(`POST /correct ${r.status}`);
   return (await r.json()) as Overrides;
 }
+export * from "./scenes/registry";

@@ -75,6 +75,11 @@ class ProfileStore:
             db.execute("UPDATE profiles SET status='complete', summary=?, samples=?, updated=? WHERE id=?",
                        (json.dumps(summary), json.dumps(samples), time.time(), pid))
 
+    def list_complete(self) -> list[dict]:
+        with self._db() as db:
+            rows = db.execute("SELECT id FROM profiles WHERE status='complete' ORDER BY updated DESC").fetchall()
+        return [p for p in (self.get(r["id"]) for r in rows) if p]
+
     def delete(self, pid: str):
         with self._db() as db:
             db.execute("DELETE FROM profiles WHERE id=?", (pid,))

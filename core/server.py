@@ -229,6 +229,19 @@ def create_app(gt_dir: Path | str | None = None, resolve_every: int = 0, profile
         sessions.live[pid] = (sess, threading.Lock())
         return _view(store.get(pid), sess)
 
+    @app.get("/profiles")
+    def list_profiles():
+        out = []
+        for p in store.list_complete():
+            try:
+                o = profile_observer(p["id"], p["summary"])
+            except (KeyError, TypeError):
+                continue
+            out.append(dict(id=p["id"], observer_id=o.id, status=p["status"], n_trials=p["n_trials"], created=p["created"],
+                            updated=p["updated"], width=p["summary"].get("width"), model=o.model, kind=o.kind,
+                            severity=o.severity))
+        return out
+
     @app.get("/profiles/{pid}")
     def get_profile(pid: str, samples: bool = False):
         prof = store.get(pid)

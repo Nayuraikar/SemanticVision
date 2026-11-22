@@ -8,3 +8,10 @@ bench/results/
 .DS_Store
 build/
 viewer/dist/
+*.db
+*.sqlite
+*.sqlite3
+bench/logs/
+viewer/dist/
+node_modules/
+.venv/

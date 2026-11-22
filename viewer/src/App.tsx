@@ -1,27 +1,31 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import {
-  applyOverrides, buildToyScene, exportSnapshot, postCorrect, stepToyScene, type Overrides, type Snapshot,
+  applyOverrides, exportSnapshot, getScene, postCorrect, SCENES, type Overrides, type Snapshot,
 } from "../../adapters/threejs";
 import { ThreePanels } from "./panels";
 import { DEFAULT_FLAGS, drawAll, type OverlayFlags } from "./overlays";
 import { Stats, type StatsSnapshot } from "./stats";
+import { API } from "./calibLib";
+import { PROFILE_PREFIX, go, simPath, useAppState } from "./appState";
+import { fetchObservers, fetchProfiles, type PresetObs, type SavedProfile } from "./screens";
 
-const API = "http://localhost:8000";
 const PW = 400, PH = 260;
 const SOLVE_EVERY = 15; // frames; server additionally caches by snapshot signature
 
-interface Obs { id: string; split: string; model: string; kind: string; severity: number }
+interface Obs { id: string; split?: string; model: string; kind: string; severity: number }
 
 const OVERLAYS: [keyof OverlayFlags, string][] = [
   ["graph", "confusion graph"], ["heatmap", "importance heatmap"], ["bboxes", "bboxes"], ["labels", "ΔE00 labels"],
 ];
 
-export function App() {
+export function App({ sceneId }: { sceneId: string }) {
   const glRef = useRef<HTMLCanvasElement>(null);
   const ovRef = useRef<HTMLCanvasElement>(null);
-  const [observers, setObservers] = useState<{ train: Obs[]; heldout: Obs[] }>({ train: [], heldout: [] });
-  const [obsId, setObsId] = useState("");
+  const { observerId, setObserver } = useAppState();
+  const obsId = observerId ?? "";
+  const [presets, setPresets] = useState<PresetObs[]>([]);
+  const [profiles, setProfiles] = useState<SavedProfile[]>([]);
   const [flags, setFlags] = useState<OverlayFlags>(DEFAULT_FLAGS);
   const [hud, setHud] = useState({ show: { tier: true, latency: true, stats: true, posterior: true } });
   const [ov, setOv] = useState<Overrides | null>(null);
@@ -31,33 +35,35 @@ export function App() {
   live.current.flags = flags;
 
   useEffect(() => {
-    fetch(`${API}/observers`).then((r) => r.json()).then((o) => {
-      setObservers(o);
-      const first = o.train[0] ?? o.heldout[0];
-      if (first) setObsId(first.id);
-    }).catch((e) => setStatus(`observers: ${e}`));
+    fetchObservers().then(setPresets).catch((e) => setStatus(`observers: ${e}`));
+    fetchProfiles().then(setProfiles).catch((e) => setStatus(`profiles: ${e}`));
   }, []);
 
   useEffect(() => {
-    const o = [...observers.train, ...observers.heldout].find((x) => x.id === obsId) ?? null;
+    const o: Obs | null = obsId.startsWith(PROFILE_PREFIX)
+      ? (profiles.find((p) => p.observer_id === obsId) ? { ...profiles.find((p) => p.observer_id === obsId)!, id: obsId } : null)
+      : presets.find((x) => x.id === obsId) ?? null;
     live.current.obs = o; live.current.force = true;
     panelsRef.current?.setObserver(o);
-  }, [obsId, observers]);
+  }, [obsId, presets, profiles]);
 
   const panelsRef = useRef<ThreePanels | null>(null);
 
   useEffect(() => {
+    const def = getScene(sceneId);
+    if (!def) { setStatus(`unknown scene ${sceneId}`); return; }
     const panels = new ThreePanels(glRef.current!, PW, PH);
     panelsRef.current = panels;
     panels.setObserver(live.current.obs);
     const stat = new Stats(panels.renderer);
-    const { scene, camera } = buildToyScene(PW / PH);
+    const { scene, camera } = def.build(PW / PH);
+    live.current.force = true;
     const prev = new Map<string, [number, number]>();
     let frame = 0, prevT: number | undefined, raf = 0, busy = false, lastSnap: Snapshot | null = null, lastOv: Overrides | null = null;
     let lastHud = 0;
     const loop = (ms: number) => {
       const t = ms / 1000;
-      stepToyScene(scene, t);
+      def.step(scene, t);
       stat.begin();
       panels.render(scene, camera);
       const L = live.current;
@@ -78,12 +84,12 @@ export function App() {
     };
     raf = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(raf); panels.dispose(); panelsRef.current = null; };
-  }, []);
+  }, [sceneId]);
 
   const d = ov?.diagnostics;
   const f1 = (x: number | null | undefined) => (x == null ? "-" : x.toFixed(1));
   const box: React.CSSProperties = { border: "1px solid #444", padding: 6, minWidth: 190, background: "#181818" };
-  const optGroup = (label: string, xs: Obs[]) => (
+  const optGroup = (label: string, xs: PresetObs[]) => (
     <optgroup label={label}>
       {xs.map((o) => <option key={o.id} value={o.id}>{`${o.id} ${o.model}/${o.kind} ${o.severity.toFixed(2)}`}</option>)}
     </optgroup>
@@ -91,9 +97,19 @@ export function App() {
   return (
     <div style={{ padding: 12 }}>
       <div style={{ marginBottom: 6 }}>
+        scene:{" "}
+        <select aria-label="scene" value={sceneId} onChange={(e) => go(simPath(e.target.value))}>
+          {SCENES.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+        </select>{" "}
+        <a href="#/scenes" style={{ color: "#8cf" }}>all scenes</a>{" | "}
+        <button onClick={() => go("#/calibrate")}>re-run calibration</button>{" | "}
         observer:{" "}
-        <select value={obsId} onChange={(e) => setObsId(e.target.value)}>
-          {optGroup("train", observers.train)}{optGroup("held-out", observers.heldout)}
+        <select aria-label="observer" value={obsId} onChange={(e) => setObserver(e.target.value)}>
+          {!presets.some((o) => o.id === obsId) && !profiles.some((p) => p.observer_id === obsId) && <option value={obsId}>{obsId}</option>}
+          {optGroup("train", presets.filter((o) => o.split === "train"))}{optGroup("held-out", presets.filter((o) => o.split !== "train"))}
+          <optgroup label="saved profiles">
+            {profiles.map((p) => <option key={p.id} value={p.observer_id}>{`${p.observer_id} ${p.kind} ${p.severity.toFixed(2)}`}</option>)}
+          </optgroup>
         </select>{" "}
         {OVERLAYS.map(([k, label]) => (
           <label key={k} style={{ marginLeft: 8 }}>

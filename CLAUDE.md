@@ -1,6 +1,6 @@
 # SemanticVision rules
 - NEVER run git (no add/commit/push/branch/stash). User handles all git.
-- Work ONLY inside /Users/nayana/Downloads/SemanticVision. Never touch files outside it.
+- Work ONLY inside the repository root (the folder containing CLAUDE.md). Never touch files outside it.
 - Spec is docs/SPEC.md. Read ONLY the sections named in the prompt, never the whole file.
 - Core (core/) must NEVER import Three.js, Unity or any engine. Engine code lives only in adapters/.
 - Use .venv Python. Every module ships with pytest tests; run them and fix failures before finishing.

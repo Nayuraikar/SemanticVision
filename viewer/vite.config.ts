@@ -9,5 +9,5 @@ export default defineConfig({
   // adapters/threejs lives outside viewer/, so its bare imports must resolve here
   resolve: { alias: { three: nm("three"), react: nm("react"), "react-dom": nm("react-dom") } },
   server: { port: 5173, fs: { allow: [".."] } },
-  test: { include: ["../adapters/threejs/**/*.test.ts", "src/**/*.test.ts"], environment: "node" },
+  test: { include: ["../adapters/threejs/**/*.test.ts", "src/**/*.test.{ts,tsx}"], environment: "node" },
 });

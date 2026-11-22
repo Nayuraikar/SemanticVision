@@ -14,7 +14,7 @@ async function call(path: string, init?: RequestInit) {
   return r.json();
 }
 
-export function Calibration() {
+export function Calibration({ onFinish, onBack }: { onFinish?: (profileId: string) => void; onBack?: () => void } = {}) {
   const [phase, setPhase] = useState<Phase>("intro");
   const [guess, setGuess] = useState("");
   const [struggle, setStruggle] = useState<string[]>([]);
@@ -63,7 +63,7 @@ export function Calibration() {
   return (
     <div style={page}>
       <h2 style={{ marginTop: 0 }}>Colour discrimination calibration</h2>
-      <p style={{ opacity: 0.8 }}>{NOTE} <a href="#/" style={{ color: "#8cf" }}>back to viewer</a></p>
+      <p style={{ opacity: 0.8 }}>{NOTE} <a href="#/observer" style={{ color: "#8cf" }} onClick={(e) => { if (onBack) { e.preventDefault(); onBack(); } }}>back</a></p>
       {err && <p style={{ color: "#f88" }}>{err}</p>}
 
       {phase === "intro" && (
@@ -111,6 +111,7 @@ export function Calibration() {
       )}
 
       {phase === "summary" && profile && <SummaryView s={profile.summary} pid={pid} />}
+      {phase === "summary" && profile && onFinish && <p><button style={btn} onClick={() => onFinish(pid)}>Use this profile and choose a scene</button></p>}
     </div>
   );
 }
