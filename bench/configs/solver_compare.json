@@ -1,0 +1,6 @@
+{"name": "solver_compare", "experiment": "solver_compare", "n_seeds": 20, "baseline": "global_dalt",
+ "params": {"scene": {"n_objects": 10, "n_frames": 60, "palette": "confusable", "motion": 0.1},
+            "stride": 20, "n_scenes": 3, "n_heldout": 12, "n_train_per_kind": 3, "adj_margin": 0.3,
+            "solver": {"delta": 15.0, "delta_mem": 3.0, "budget_ms": 1500},
+            "de": {"maxiter": 60, "popsize": 8},
+            "methods": ["none", "global_dalt", "local_dalt", "kuhn2008", "cd", "de"]}}
