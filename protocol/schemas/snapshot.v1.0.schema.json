@@ -1,0 +1,446 @@
+{
+  "$defs": {
+    "AmbientDominantLighting": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "ambient_dominant",
+          "default": "ambient_dominant",
+          "title": "Kind",
+          "type": "string"
+        },
+        "ambient_rgb": {
+          "description": "linear RGB in [0,1]",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Ambient Rgb",
+          "type": "array"
+        },
+        "dominant_rgb": {
+          "description": "linear RGB in [0,1]",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Dominant Rgb",
+          "type": "array"
+        },
+        "dominant_dir": {
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Dominant Dir",
+          "type": "array"
+        },
+        "white_point": {
+          "default": [
+            0.9505,
+            1.0,
+            1.089
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "White Point",
+          "type": "array"
+        },
+        "exposure": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "title": "Exposure",
+          "type": "number"
+        }
+      },
+      "required": [
+        "ambient_rgb",
+        "dominant_rgb",
+        "dominant_dir"
+      ],
+      "title": "AmbientDominantLighting",
+      "type": "object"
+    },
+    "BBox": {
+      "additionalProperties": false,
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        },
+        "w": {
+          "minimum": 0,
+          "title": "W",
+          "type": "number"
+        },
+        "h": {
+          "minimum": 0,
+          "title": "H",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "BBox",
+      "type": "object"
+    },
+    "Event": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "state_change",
+            "collision",
+            "enter_view",
+            "exit_view",
+            "lighting_change"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "object_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object Id"
+        },
+        "data": {
+          "additionalProperties": true,
+          "title": "Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Event",
+      "type": "object"
+    },
+    "SHLighting": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "sh2",
+          "default": "sh2",
+          "title": "Kind",
+          "type": "string"
+        },
+        "coeffs": {
+          "description": "9 SH-L2 coeffs x RGB",
+          "items": {
+            "description": "linear RGB in [0,1]",
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "maxItems": 9,
+          "minItems": 9,
+          "title": "Coeffs",
+          "type": "array"
+        },
+        "white_point": {
+          "default": [
+            0.9505,
+            1.0,
+            1.089
+          ],
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "White Point",
+          "type": "array"
+        },
+        "exposure": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "title": "Exposure",
+          "type": "number"
+        }
+      },
+      "required": [
+        "coeffs"
+      ],
+      "title": "SHLighting",
+      "type": "object"
+    },
+    "SceneObject": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "title": "Id",
+          "type": "string"
+        },
+        "class": {
+          "minLength": 1,
+          "title": "Class",
+          "type": "string"
+        },
+        "state": {
+          "default": "default",
+          "title": "State",
+          "type": "string"
+        },
+        "albedo_rgb": {
+          "description": "linear RGB in [0,1]",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Albedo Rgb",
+          "type": "array"
+        },
+        "emissive_rgb": {
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "description": "linear RGB in [0,1]",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Emissive Rgb",
+          "type": "array"
+        },
+        "screen_area": {
+          "description": "fraction of viewport",
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Screen Area",
+          "type": "number"
+        },
+        "bbox": {
+          "$ref": "#/$defs/BBox"
+        },
+        "depth": {
+          "minimum": 0,
+          "title": "Depth",
+          "type": "number"
+        },
+        "velocity": {
+          "default": [
+            0.0,
+            0.0
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Velocity",
+          "type": "array"
+        },
+        "task_tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Task Tags",
+          "type": "array"
+        },
+        "lit_color": {
+          "anyOf": [
+            {
+              "description": "linear RGB in [0,1]",
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lit Color"
+        }
+      },
+      "required": [
+        "id",
+        "class",
+        "albedo_rgb",
+        "screen_area",
+        "bbox",
+        "depth"
+      ],
+      "title": "SceneObject",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "frame": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Frame",
+      "type": "integer"
+    },
+    "t": {
+      "default": 0.0,
+      "minimum": 0,
+      "title": "T",
+      "type": "number"
+    },
+    "objects": {
+      "items": {
+        "$ref": "#/$defs/SceneObject"
+      },
+      "title": "Objects",
+      "type": "array"
+    },
+    "lighting": {
+      "discriminator": {
+        "mapping": {
+          "ambient_dominant": "#/$defs/AmbientDominantLighting",
+          "sh2": "#/$defs/SHLighting"
+        },
+        "propertyName": "kind"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/SHLighting"
+        },
+        {
+          "$ref": "#/$defs/AmbientDominantLighting"
+        }
+      ],
+      "title": "Lighting"
+    },
+    "events": {
+      "items": {
+        "$ref": "#/$defs/Event"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "observer_id": {
+      "minLength": 1,
+      "title": "Observer Id",
+      "type": "string"
+    },
+    "budget_ms": {
+      "exclusiveMinimum": 0,
+      "title": "Budget Ms",
+      "type": "number"
+    }
+  },
+  "required": [
+    "lighting",
+    "observer_id",
+    "budget_ms"
+  ],
+  "title": "Snapshot",
+  "type": "object"
+}

@@ -1,0 +1,207 @@
+{
+  "$defs": {
+    "ConfusionPair": {
+      "additionalProperties": false,
+      "properties": {
+        "ids": {
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "title": "Ids",
+          "type": "array"
+        },
+        "de00_before": {
+          "minimum": 0,
+          "title": "De00 Before",
+          "type": "number"
+        },
+        "de00_after": {
+          "minimum": 0,
+          "title": "De00 After",
+          "type": "number"
+        },
+        "feasible": {
+          "title": "Feasible",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ids",
+        "de00_before",
+        "de00_after",
+        "feasible"
+      ],
+      "title": "ConfusionPair",
+      "type": "object"
+    },
+    "Cue": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "outline",
+            "hatch",
+            "icon",
+            "label"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "parameters": {
+          "additionalProperties": true,
+          "title": "Parameters",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "title": "Cue",
+      "type": "object"
+    },
+    "Diagnostics": {
+      "additionalProperties": false,
+      "properties": {
+        "stage_latency_ms": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Stage Latency Ms",
+          "type": "object"
+        },
+        "solver_tier": {
+          "default": "none",
+          "enum": [
+            "exact",
+            "learned",
+            "cached",
+            "fallback",
+            "none"
+          ],
+          "title": "Solver Tier",
+          "type": "string"
+        },
+        "fallback_flags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fallback Flags",
+          "type": "array"
+        }
+      },
+      "title": "Diagnostics",
+      "type": "object"
+    },
+    "PaletteOverride": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "albedo": {
+          "description": "linear RGB in [0,1]",
+          "maxItems": 3,
+          "minItems": 3,
+          "prefixItems": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "title": "Albedo",
+          "type": "array"
+        },
+        "emissive": {
+          "anyOf": [
+            {
+              "description": "linear RGB in [0,1]",
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Emissive"
+        }
+      },
+      "required": [
+        "id",
+        "albedo"
+      ],
+      "title": "PaletteOverride",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "frame": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Frame",
+      "type": "integer"
+    },
+    "palette_overrides": {
+      "items": {
+        "$ref": "#/$defs/PaletteOverride"
+      },
+      "title": "Palette Overrides",
+      "type": "array"
+    },
+    "cues": {
+      "items": {
+        "$ref": "#/$defs/Cue"
+      },
+      "title": "Cues",
+      "type": "array"
+    },
+    "confusion_pairs": {
+      "items": {
+        "$ref": "#/$defs/ConfusionPair"
+      },
+      "title": "Confusion Pairs",
+      "type": "array"
+    },
+    "diagnostics": {
+      "$ref": "#/$defs/Diagnostics"
+    }
+  },
+  "title": "Overrides",
+  "type": "object"
+}

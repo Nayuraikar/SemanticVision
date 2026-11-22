@@ -1,0 +1,12 @@
+# SemanticVision rules
+- NEVER run git (no add/commit/push/branch/stash). User handles all git.
+- Work ONLY inside /Users/nayana/Downloads/SemanticVision. Never touch files outside it.
+- Spec is docs/SPEC.md. Read ONLY the sections named in the prompt, never the whole file.
+- Core (core/) must NEVER import Three.js, Unity or any engine. Engine code lives only in adapters/.
+- Use .venv Python. Every module ships with pytest tests; run them and fix failures before finishing.
+- Every benchmark number comes from a seeded, scripted run (bench/). No manual numbers.
+- Never score under the observer you optimised for. Held-out observers and scenes only.
+- Be terse: no explanations, no recaps, no unrequested docs. Write code, run tests.
+- Final reply format: max 8 lines = files created, test result, open issues.
+- At the end of each phase, append 5 lines to docs/PROGRESS.md (done / API signatures / known gaps).
+- Read docs/PROGRESS.md at the start of each phase instead of re-reading old code.
