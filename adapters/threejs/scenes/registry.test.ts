@@ -31,8 +31,9 @@ describe("scene registry", () => {
   it("planned scenes are disabled cards", () => {
     const cards = sceneCards();
     const dis = cards.filter((c) => c.disabled).map((c) => c.id);
-    expect(dis).toEqual(["dashboard", "cockpit", "icu", "construction", "rail-airport"]);
+    expect(dis).toEqual(["cockpit", "icu", "construction", "rail-airport"]);
     expect(cards.find((c) => c.id === "toy")!.disabled).toBe(false);
+    expect(cards.find((c) => c.id === "dashboard")!.disabled).toBe(false);
   });
 
   it("toy build/step through the registry give the same snapshots as direct calls, with state changes", () => {

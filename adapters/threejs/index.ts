@@ -19,3 +19,4 @@ export * from "./physics";
 export * from "./rng";
 export * from "./environments";
 export * from "./trafficSim";
+export * from "./dashboardSim";

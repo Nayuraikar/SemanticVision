@@ -77,7 +77,7 @@ const correctIds = () => calls.filter((c) => c.url === "/correct").map((c) => c.
 
 async function toSim() {
   await screen.findByText("Choose a scene");
-  for (const t of ["Dashboard", "Cockpit", "ICU", "Construction site", "Rail / airport"]) {
+  for (const t of ["Cockpit", "ICU", "Construction site", "Rail / airport"]) {
     const card = screen.getByText(t).closest("div")!;
     expect(card.querySelector("button")!.disabled).toBe(true);
     expect(card.textContent).toContain("Coming soon");

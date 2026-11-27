@@ -89,3 +89,31 @@
 - Censoring (6 seeds, held-out): seeds with no critical pair day 0, night 3, fog 0, rain 3 (none lacked pairs in all envs). Censored pair-observers, none/event_driven/no_ema/combined: day 13/12/12/12 of 16, night 4/4/4/4 of 7, fog 3/3/4/4 of 12, rain 6/6/6/6 of 7; uncorrected all. Held-out pair-observers/env average 1.2-2.7, so the ~3 pair target is met in the train census only (different units).
 - Latency, resolved pairs only, frames/ms (20 Hz): none 1.29/65, event_driven 1.92/96, no_ema 1.67/83, combined 2.17/108. Lower bound with censored at 40 frames: 19.9/996, 19.7/987, 20.2/1010, 20.3/1015. Collision trigger 0 frames/0 ms, first display 1 frame/50 ms (all four arms, none missed). Crit success .49 each (uncorrected 0); solves/frame none 1.0, event_driven .45, no_ema/combined .45.
 - Gaps: about half of critical pair-observers never resolve in the window; n=6 with wide CIs, so no arm ranking; fog still not consumed by core; viewer selector not checked in a browser.
+
+## Phase: held-out dashboard + transfer K5 (SPEC 6)
+- Done: tests/fixtures/core_hash.json (63 files, written before the scene; tests/test_core_hash.py; learned.onnx is gitignored, so a fresh clone needs the same file); adapters/threejs/{dashboardSim.ts,scenes/dashboard.ts} (30 annunciators, 4 gauges, 6 status lamps, normal/dim/glare, seeded cascade; colours chosen once, never adjusted); record.ts --scene dashboard; fixtures dashboard_{normal,dim,glare}.ndjson; tests dashboard.test.ts, test_dashboard_heldout.py, test_transfer.py. Core/protocol/calibration/learning unchanged. pytest 195 pass/1 skip, vitest 37, build ok.
+- API: DashboardSim({seed,scenario quiet|alarm,env}).{tick,advance,reset,setLighting,cascade}; recordDashboard(); `python -m bench run --config transfer|transfer_b500`, then `python -m bench.experiments.transfer [raw.csv]` -> bench/results/<name>_{table,tests,censoring}.csv. Latency stage mapping is defined in transfer.py's docstring. Runtime: transfer (8 seeds, recorded 40 ms budget, primary) 4:47; transfer_b500 (6 seeds, 500 ms for both envs, secondary, chosen AFTER the primary result) 4:50; 4 workers.
+- Held-out caveat: a pre-existing synthetic palette NAMED "dashboard" (4 colours, engine-free generator) was in learned-solver training (learning/data.py) and in the held-out set used to select the importance MLP (importance_eval.py). The grep guard pins exactly those 2 lines; the 3D scene, streams and fixtures are referenced by no tuning code.
+- Censoring / gap: dashboard has NO critical pair in any seed/condition (primary 8/8 seeds, 24/24 cells; b500 6/6, 18/18), so min dE00 and success gaps are UNDEFINED. Mean candidates/stream 65 dashboard vs 95 traffic; mean per-seed closest uncorrected dE00/tau 2.97-3.06 vs ~0.89 (critical < 1). Traffic cells without critical pair: primary 7/32 (night 3, rain 4), b500 6/24 (night 3, rain 3); no whole traffic seed censored. Tier-2 fallback censored in all 56 primary cells (no calls), 0 cells in b500.
+- Gaps: (1) at 40 ms the allocator budget is spent before planning on these ~100-object scenes: 100% skip, tier 2 never runs. (2) With all-skip, displayed colours still differ from the originals (lit -> albedo/emissive round trip in to_overrides, inferred cause; scratch probe: 31/94 traffic, 20/93 dashboard objects >1 dE00, max 6.1/3.0), so primary traffic min dE00/success/flicker are NOT correction effects, and b500 includes the same distortion. Not fixed (frozen core). (3) Frame time is far over 40 ms (4-worker contention, wall-clock budget => not bit-reproducible). (4) Infeasible = raw count of adjacent object pairs failing the train-observer screen check, scales with scene structure. (5) Dashboard censoring means the K5 transfer claim for colour separation is untested; dashboard viewer has no lighting selector and was not checked in a browser.
+
+Transfer table, mean (n seeds with data; "-" = censored). Columns: min dE00 / uncorrected min dE00 / success / infeasible per solve / tier-2 fallback / flicker excess / frame ms.
+
+| condition | 40 ms (primary) | 500 ms (secondary) |
+|---|---|---|
+| traffic day | 6.01 / 5.24 / .42 / 215 / - / 0.72 / 278 (8) | 5.50 / 5.14 / .60 / 108 / .79 / 7.95 / 393 (6) |
+| traffic night | 5.20 / 6.05 / .15 / 255 / - / -1.69 / 291 (5) | 6.00 / 6.84 / .62 / 154 / .78 / 3.71 / 456 (3) |
+| traffic fog | 8.00 / 5.92 / .79 / 298 / - / 0.08 / 282 (8) | 9.77 / 6.02 / .70 / 127 / .80 / 4.23 / 375 (6) |
+| traffic rain | 8.17 / 7.75 / .28 / 352 / - / -0.38 / 262 (4) | 12.8 / 8.10 / .79 / 128 / .84 / 8.56 / 449 (3) |
+| traffic all | 6.86 / 5.89 / .52 / 280 / - / -0.32 / 278 (8) | 8.00 / 6.02 / .69 / 129 / .80 / 6.11 / 418 (6) |
+| dashboard normal | - / - / - / 77 / - / -1.21 / 172 | - / - / - / 5.2 / .27 / 5.26 / 238 |
+| dashboard dim | - / - / - / 177 / - / 0.41 / 172 | - / - / - / 4.1 / .36 / 7.76 / 225 |
+| dashboard glare | - / - / - / 67 / - / -0.35 / 176 | - / - / - / 2.2 / .21 / 5.04 / 222 |
+| dashboard all | - / - / - / 107 / - / -0.38 / 173 | - / - / - / 3.8 / .28 / 6.02 / 228 |
+
+(flicker and frame ms use all seeds: 8 primary, 6 secondary; the n in brackets applies to the pair metrics.)
+
+Pooled gap dashboard - traffic, paired by seed [95% CI], Holm p (families: outcome, latency; each over all 4 comparisons):
+- 40 ms: infeasible -173 [-218,-127] p<.001; flicker -0.07 [-0.65,0.52] p=1; total ms -105 [-127,-82] p<.001. Per condition flicker: dim +0.72 [0.46,0.99] p=.006 (dashboard worse); others n.s.
+- 500 ms: infeasible -126 [-146,-105] p<.001; tier-2 fallback -.52 [-.59,-.45] p<.001; flicker -0.09 [-1.85,1.67] p=1; total ms -190 [-226,-154] p<.001.
+- Stage ms traffic/dashboard (detect, decide, correct, allocate, stabilise): 40 ms 100/92, 2.2/1.5, 118/33, 5.7/1.1, 53/47; 500 ms 92/87, 2.2/1.5, 265/94, 7.7/1.3, 51/44. Welch was only the fallback for unmatched/empty cells; every defined gap had all seeds matched.

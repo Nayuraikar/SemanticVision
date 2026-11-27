@@ -1,0 +1,4 @@
+{"name": "transfer", "experiment": "transfer", "n_seeds": 8,
+ "params": {"envs": {"traffic": ["day", "night", "fog", "rain"], "dashboard": ["normal", "dim", "glare"]},
+            "steps": 540, "every": 3, "pre": 10, "post": 40, "n_train": 3, "n_heldout": 4,
+            "workers": 4, "prefetch": 8}}
