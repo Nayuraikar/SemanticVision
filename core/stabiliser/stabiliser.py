@@ -2,7 +2,10 @@
 can run them alone and combined.
 
 Pipeline per frame: triggers -> (re)solve or hold -> hysteresis gate -> EMA -> slew -> candidate palette ->
-(optional compute delay) -> verify -> double-buffer swap -> renderer reads the validated front palette."""
+(optional compute delay) -> verify -> double-buffer swap -> renderer reads the validated front palette.
+
+Only solver-changed entries are held / smoothed, always as offsets from the CURRENT original; everything else shows
+the current original, also when the front palette is older than the frame (delay, rejection)."""
 from __future__ import annotations
 import math
 from collections import deque
@@ -20,6 +23,16 @@ from .triggers import TriggerConfig, TriggerDetector
 
 MECHANISMS = ("ema", "hysteresis", "slew", "event_driven")
 Pair = tuple
+SAME_RGB = 1e-3     # linear RGB; core.server.signature rounds to 3 decimals, so a cached solve may differ by less
+
+
+def _same(x, y) -> bool:
+    return all(np.max(np.abs(p - q)) <= SAME_RGB for p, q in zip(x, y))
+
+
+def _apply(orig, off):
+    """orig, off: (albedo, emissive) -> displayable colours."""
+    return np.clip(orig[0] + off[0], 0.0, 1.0), np.maximum(orig[1] + off[1], 0.0)
 
 
 @dataclass
@@ -94,14 +107,14 @@ class Stabiliser:
         self.t = None
         self.version = 0
         self.age = 0
-        self.sol: dict = {}            # id -> (albedo, emissive) of the last solve
+        self.sol: dict = {}            # id -> (offset, original at solve time), ONLY entries the last solve changed
         self.sol_cues: dict = {}
         self.sol_ov: Optional[Overrides] = None
         self.an = Analysis()
         self.ema: dict = {}            # id -> smoothed correction offset
         self.off: dict = {}            # id -> last candidate's correction offset (slew reference = original + off)
         self.ref: dict = {}            # id -> slew reference used for the current candidate
-        self.corr: dict = {}           # id -> last real correction (held while a pair is inside its hysteresis band)
+        self.corr: dict = {}           # id -> last real (offset, original), held inside a pair's hysteresis band
         self.pending: deque = deque()
         self.n_solves = 0
 
@@ -148,9 +161,14 @@ class Stabiliser:
             self.n_solves += 1
             self.age = 0
             self.sol_ov = ov
-            self.sol = {p.id: (np.array(p.albedo, float),
-                               np.array(p.emissive if p.emissive is not None else orig.get(p.id, (0, np.zeros(3)))[1], float))
-                        for p in ov.palette_overrides}
+            self.sol = {}
+            for p in ov.palette_overrides:
+                o = orig.get(p.id)
+                if o is None:
+                    continue
+                col = (np.array(p.albedo, float), np.array(p.emissive if p.emissive is not None else o[1], float))
+                if not _same(col, o):
+                    self.sol[p.id] = ((col[0] - o[0], col[1] - o[1]), o)
             self.sol_cues = {k.id: k for k in ov.cues}
         else:
             self.age += 1
@@ -167,19 +185,29 @@ class Stabiliser:
             gate = lambda i: i in act_ids or (i in grp and grp[i] in act_groups)
         else:
             gate = lambda i: True
-        target = {}
+        zero = (np.zeros(3), np.zeros(3))
+        target = {}                                 # id -> correction offset; absent = follow the current original
         for i in ids:
             s = self.sol.get(i)
+            held = self.corr.get(i) if c.hysteresis else None
+            if held is not None and not _same(held[1], orig[i]):
+                held = None                         # solved for a colour the object no longer has
+                del self.corr[i]
             if not gate(i):
                 self.corr.pop(i, None)
-                target[i] = orig[i]
-            elif s is None:
-                target[i] = orig[i]
-            elif not c.hysteresis or max(float(de00(s[0], orig[i][0])), float(de00(s[1], orig[i][1]))) > 0.5:
-                self.corr[i] = s
-                target[i] = s
-            else:                                   # solver does not act now (pair vanished / inside the band): hold
-                target[i] = self.corr.get(i, s)
+                if s is not None:
+                    target[i] = zero                # the stabiliser's own suppression: released smoothly
+                continue
+            if s is not None:
+                shown_now = _apply(orig[i], s[0])
+                if not c.hysteresis or max(float(de00(shown_now[k], orig[i][k])) for k in (0, 1)) > 0.5:
+                    self.corr[i] = s
+                    target[i] = s[0]
+                    continue
+            if held is not None:                    # solver does not act now (pair vanished / inside the band): hold
+                target[i] = held[0]
+            elif s is not None:
+                target[i] = s[0]
 
         # 3./4. EMA and slew act on the CORRECTION OFFSET (displayed - original), so true scene changes (a light
         # turning green) are never delayed; only the stabiliser's own changes are smoothed / rate-limited.
@@ -187,13 +215,17 @@ class Stabiliser:
         a = 1.0 - math.exp(-dt / c.ema_tau)
         want, ref = {}, {}
         for i in ids:
-            off = (target[i][0] - orig[i][0], target[i][1] - orig[i][1])
+            if i not in target:                     # unchanged: no smoothing, no slew
+                self.ema[i] = zero
+                want[i] = orig[i]
+                continue
+            off = target[i]
             if c.ema and i in self.ema:
                 off = tuple(p + a * (q - p) for p, q in zip(self.ema[i], off))
             self.ema[i] = off
             want[i] = (orig[i][0] + off[0], orig[i][1] + off[1])
             if i in self.off:
-                ref[i] = (np.clip(orig[i][0] + self.off[i][0], 0.0, 1.0), np.maximum(orig[i][1] + self.off[i][1], 0.0))
+                ref[i] = _apply(orig[i], self.off[i])
         cand = dict(want)
         if c.slew:
             old = [i for i in ids if i in ref]
@@ -217,7 +249,8 @@ class Stabiliser:
         self.version += 1
         pal = Palette.build(self.version, f, dt, {i: v[0] for i, v in cand.items()}, {i: v[1] for i, v in cand.items()},
                             {i: k for i, k in cues.items() if i in cand},
-                            ref={i: (tuple(map(float, a)), tuple(map(float, e))) for i, (a, e) in self.ref.items()})
+                            ref={i: (tuple(map(float, a)), tuple(map(float, e))) for i, (a, e) in self.ref.items()},
+                            offsets={i: self.off[i] for i in target})
         self.pending.append((f + c.compute_frames, pal))
         rejected = False
         while self.pending and self.pending[0][0] <= f:
@@ -231,8 +264,14 @@ class Stabiliser:
 
         # 7. renderer view
         front = self.buffer.read()
-        shown = {} if front is None else {i: (np.array(front.albedo[i]), np.array(front.emissive[i]))
-                                          for i in ids if i in front.albedo}
+        shown = {}
+        for i in ids:
+            if front is None or i not in front.albedo:
+                continue
+            if front.version == self.version:       # this frame's own palette
+                shown[i] = (np.array(front.albedo[i]), np.array(front.emissive[i]))
+            else:                                   # older palette: only its corrections carry over
+                shown[i] = _apply(orig[i], front.offsets[i]) if i in front.offsets else orig[i]
         po = [PaletteOverride(id=i, albedo=tuple(float(x) for x in a), emissive=tuple(float(x) for x in e))
               for i, (a, e) in shown.items()]
         base = self.sol_ov

@@ -27,14 +27,16 @@ class Palette:
     cues: Mapping
     digest: str
     ref: Mapping = None             # id -> (albedo, emissive) slew reference the candidate was limited against
+    offsets: Mapping = None         # id -> (albedo, emissive) correction offset, corrected entries only
 
     @classmethod
-    def build(cls, version, frame, dt, albedo, emissive, cues=None, ref=None):
+    def build(cls, version, frame, dt, albedo, emissive, cues=None, ref=None, offsets=None):
         a = {i: tuple(float(x) for x in v) for i, v in albedo.items()}
         e = {i: tuple(float(x) for x in v) for i, v in emissive.items()}
         c = dict(cues or {})
         return cls(version, frame, dt, MappingProxyType(a), MappingProxyType(e), MappingProxyType(c),
-                   _digest(version, frame, dt, a, e, c), MappingProxyType(dict(ref or {})))
+                   _digest(version, frame, dt, a, e, c), MappingProxyType(dict(ref or {})),
+                   MappingProxyType(dict(offsets or {})))
 
     def intact(self) -> bool:
         return self.digest == _digest(self.version, self.frame, self.dt, self.albedo, self.emissive, self.cues)
