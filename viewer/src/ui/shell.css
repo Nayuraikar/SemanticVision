@@ -150,3 +150,20 @@ a { color: var(--sv-link); }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .sv-card { transform: none; }
 }
+
+/* ---------- environment dial + timeline ---------- */
+.sv-envbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sv-s2); margin-top: var(--sv-s3); }
+.sv-dial { position: relative; display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; margin-right: auto; padding: 4px; border: 1px solid var(--sv-border); border-radius: var(--sv-pill); background: var(--sv-glass-strong); }
+.sv-dial button { position: relative; padding: 6px 18px; border: 0; background: transparent; color: var(--sv-text-dim); font: inherit; font-size: var(--sv-fs-s); cursor: pointer; transition: color var(--sv-t-med); }
+.sv-dial button[aria-checked="true"] { color: var(--sv-on-accent); font-weight: 600; }
+.sv-dial-thumb { position: absolute; top: 4px; bottom: 4px; left: 4px; border-radius: var(--sv-pill); background: linear-gradient(135deg, var(--sv-accent), var(--sv-accent-2)); box-shadow: 0 0 18px var(--sv-glow); transition: transform var(--sv-t-slow) var(--sv-ease); }
+.sv-timeline { position: sticky; bottom: var(--sv-s2); z-index: 5; margin-top: var(--sv-s3); padding: var(--sv-s3) var(--sv-s4); border-radius: var(--sv-r2); }
+.sv-timeline-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sv-s2); }
+.sv-time { margin-left: auto; font: var(--sv-fs-s) var(--sv-mono); font-variant-numeric: tabular-nums; color: var(--sv-text-dim); }
+.sv-track { position: relative; height: 34px; margin-top: var(--sv-s2); }
+.sv-track input { position: absolute; inset: 0 0 auto; width: 100%; margin: 0; accent-color: var(--sv-accent); }
+.sv-marker { position: absolute; bottom: 0; width: 5px; height: 12px; padding: 0; border: 0; border-radius: 3px; transform: translateX(-50%); background: var(--sv-text-dim); cursor: pointer; }
+.sv-marker[data-kind="state"] { height: 7px; opacity: 0.6; }
+.sv-marker[data-kind="signal"] { background: var(--sv-link); }
+.sv-marker[data-kind="cascade"] { background: var(--sv-accent); height: 15px; }
+.sv-marker[data-kind="collision"] { background: var(--sv-danger); height: 16px; width: 7px; }

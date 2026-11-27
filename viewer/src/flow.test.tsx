@@ -18,7 +18,8 @@ vi.mock("./stats", () => ({
     snapshot() { return { fps: 0, frameMs: 0, gpuMs: null, heapMB: 0, calls: 0, triangles: 0, geometries: 0, textures: 0 }; }
   },
 }));
-vi.mock("./overlays", () => ({
+vi.mock("./overlays", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./overlays")>()),
   DEFAULT_FLAGS: { graph: true, heatmap: true, bboxes: true, labels: true },
   drawAll: () => {},
 }));
@@ -133,11 +134,12 @@ describe("app flow", () => {
     await toSim();
     expect(screen.queryByLabelText("lighting")).toBeNull();
     fireEvent.change(await screen.findByLabelText("scene"), { target: { value: "dashboard" } });
-    const sel = (await screen.findByLabelText("lighting")) as HTMLSelectElement;
-    expect([...sel.options].map((o) => o.value)).toEqual(["normal", "dim", "glare"]);
-    expect(screen.queryByLabelText("environment")).toBeNull();
-    fireEvent.change(sel, { target: { value: "glare" } });
-    expect(sel.value).toBe("glare");
+    const dial = await screen.findByRole("radiogroup", { name: "lighting" });
+    const radios = [...dial.querySelectorAll('[role="radio"]')] as HTMLElement[];
+    expect(radios.map((r) => r.textContent)).toEqual(["normal", "dim", "glare"]);
+    expect(screen.queryByRole("radiogroup", { name: "environment" })).toBeNull();
+    fireEvent.click(radios[2]);
+    expect(radios[2].getAttribute("aria-checked")).toBe("true");
     expect(dashboardScene.ENV).toBe("glare");
     await waitFor(() => expect(calls.some((c) => c.url === "/correct" &&
       c.body.objects.some((o: any) => o.id === "master_warning"))).toBe(true));

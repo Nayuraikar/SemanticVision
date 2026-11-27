@@ -3,9 +3,13 @@
 import * as THREE from "three";
 import { svMeshes, originalColors, type Overrides, type SVMesh } from "../../adapters/threejs";
 import { FRAG, VERT } from "./shaders";
+import { Cinematic } from "./sim/cinematic";
 import { buildCvdUniforms, IDENTITY_CVD, type CvdUniforms, type ObserverLike } from "./cvd";
 
 type Mode = "orig" | "corr";
+
+/** Display-only extras: neither reaches the scene render targets. */
+export interface PanelFx { overlay: THREE.Scene | null; cinematic: boolean }
 
 export class ThreePanels {
   readonly renderer: THREE.WebGLRenderer;
@@ -17,6 +21,7 @@ export class ThreePanels {
   private qCam = new THREE.Camera();
   private pal = new Map<string, [number, number, number]>();
   private cvd: CvdUniforms = IDENTITY_CVD;
+  private post: Cinematic | null = null;
 
   constructor(canvas: HTMLCanvasElement, readonly pw: number, readonly ph: number) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
@@ -74,7 +79,7 @@ export class ThreePanels {
     }
   }
 
-  render(scene: THREE.Scene, camera: THREE.PerspectiveCamera) {
+  render(scene: THREE.Scene, camera: THREE.PerspectiveCamera, fx?: PanelFx) {
     const r = this.renderer;
     r.info.reset();
     const prevTM = r.toneMapping;
@@ -84,21 +89,42 @@ export class ThreePanels {
     this.show(scene, "corr");
     r.setRenderTarget(this.rtCorr); r.clear(); r.render(scene, camera);
     this.show(scene, "orig");
+    if (fx?.cinematic) this.post ??= new Cinematic(r, this.pw * 3, this.ph);
+    else if (this.post) { this.post.dispose(); this.post = null; }
+    const out = this.post?.input ?? null;
     r.setRenderTarget(null);
     r.setScissorTest(true);
     const panels: [THREE.WebGLRenderTarget, boolean][] = [[this.rtOrig, false], [this.rtOrig, true], [this.rtCorr, true]];
     panels.forEach(([rt, sim], i) => {
-      r.setViewport(i * this.pw, 0, this.pw, this.ph);
-      r.setScissor(i * this.pw, 0, this.pw, this.ph);
+      if (out) {
+        out.viewport.set(i * this.pw, 0, this.pw, this.ph);
+        out.scissor.set(i * this.pw, 0, this.pw, this.ph);
+        out.scissorTest = true;
+        r.setRenderTarget(out);
+      } else {
+        r.setViewport(i * this.pw, 0, this.pw, this.ph);
+        r.setScissor(i * this.pw, 0, this.pw, this.ph);
+      }
       this.mat.uniforms.uTex.value = rt.texture;
       this.mat.uniforms.uSim.value = sim;
       r.render(this.qScene, this.qCam);
+      if (fx?.overlay) {
+        r.autoClear = false;
+        r.render(fx.overlay, camera);
+        r.autoClear = true;
+      }
     });
     r.setScissorTest(false);
+    if (this.post) {
+      r.setRenderTarget(null);
+      r.setViewport(0, 0, this.pw * 3, this.ph);
+      this.post.render();
+    }
     r.toneMapping = prevTM;
   }
 
   dispose() {
+    this.post?.dispose(); this.post = null;
     this.rtOrig.dispose(); this.rtCorr.dispose(); this.mat.dispose(); this.quad.geometry.dispose(); this.renderer.dispose();
   }
 }
