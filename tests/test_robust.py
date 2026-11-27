@@ -79,7 +79,7 @@ def test_profile_error_bench_fixed_seed():
 def test_server_robust_flag_profile(tmp_path):
     import time
     o, p = post("wide_correct", 0, 64)
-    snap = next(iter(generate(SynthConfig(n_objects=8, n_frames=1, palette="confusable"), 0)))
+    snap = next(iter(generate(SynthConfig(n_objects=16, n_frames=1, palette="confusable"), 0)))  # solver must act
     res = {}
     for mode in ("point", "cvar", "worst"):
         c = TestClient(create_app(gt_dir=tmp_path / "gt", profiles_db=tmp_path / f"{mode}.db", robust=mode))

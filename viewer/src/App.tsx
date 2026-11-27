@@ -11,6 +11,8 @@ import { PROFILE_PREFIX, go, simPath, useAppState } from "./appState";
 import { fetchObservers, fetchProfiles, type PresetObs, type SavedProfile } from "./screens";
 import * as trafficScene from "../../adapters/threejs/scenes/traffic";
 import { ENVS, type EnvName } from "../../adapters/threejs/environments";
+import * as dashboardScene from "../../adapters/threejs/scenes/dashboard";
+import { DASH_LIGHTINGS, type DashLighting } from "../../adapters/threejs/dashboardSim";
 
 const PW = 400, PH = 260;
 const SOLVE_EVERY = 15; // frames; server additionally caches by snapshot signature
@@ -34,6 +36,7 @@ export function App({ sceneId }: { sceneId: string }) {
   const [stats, setStats] = useState<StatsSnapshot | null>(null);
   const [status, setStatus] = useState("idle");
   const [env, setEnvState] = useState<EnvName>(trafficScene.ENV);
+  const [lighting, setLightingState] = useState<DashLighting>(dashboardScene.ENV);
   const live = useRef({ obs: null as Obs | null, flags, force: false });
   live.current.flags = flags;
 
@@ -87,7 +90,7 @@ export function App({ sceneId }: { sceneId: string }) {
     };
     raf = requestAnimationFrame(loop);
     return () => { cancelAnimationFrame(raf); panels.dispose(); panelsRef.current = null; };
-  }, [sceneId, env]);
+  }, [sceneId, env, lighting]);
 
   const d = ov?.diagnostics;
   const f1 = (x: number | null | undefined) => (x == null ? "-" : x.toFixed(1));
@@ -109,6 +112,13 @@ export function App({ sceneId }: { sceneId: string }) {
           <select aria-label="environment" value={env}
             onChange={(e) => { const v = e.target.value as EnvName; trafficScene.setEnv(v); setEnvState(v); }}>
             {ENVS.map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>{" "}
+        </>)}
+        {sceneId === dashboardScene.id && (<>
+          lighting:{" "}
+          <select aria-label="lighting" value={lighting}
+            onChange={(e) => { const v = e.target.value as DashLighting; dashboardScene.setEnv(v); setLightingState(v); }}>
+            {DASH_LIGHTINGS.map((x) => <option key={x} value={x}>{x}</option>)}
           </select>{" "}
         </>)}
         <a href="#/scenes" style={{ color: "#8cf" }}>all scenes</a>{" | "}

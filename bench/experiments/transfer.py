@@ -11,10 +11,21 @@ Latency stages per frame (ms, bench's own mapping, measured around unmodified co
   allocate = allocator planning (Diagnostics.allocator_ms)            correct = rest of Corrector.run
   stabilise = rest of Stabiliser.step                                 total = whole Stabiliser.step
 transfer.json keeps the recorded 40 ms budget (primary); transfer_b500.json raises it to 500 ms for BOTH
-environments because at 40 ms the allocator has no budget left on these ~100-object scenes (secondary, chosen after
-the primary result).
+environments (secondary budget, first chosen after the first (v1) primary result). budget_ms pays for the correction
+stage only (planning + tier solving); analysis and verification are reported as solve_*_ms.
+SECONDARY analysis "task pairs" (metrics task_*), DEFINED AFTER THE PRIMARY RESULT because the primary pair metrics
+were censored on the dashboard: all pairs of lit emissive indicators with different semantic states that a task must
+tell apart, regardless of adjacency, with no confusability / palette-group / normal-vision filter.
+  traffic:   signal lamps red/amber/green against each other; brake lights (on) against hazard flashers (vehicle
+             indicators in state hazard)
+  dashboard: annunciator and status lamps red/amber/green against each other
+A pair (ids + states) is scored on the window frames from the anchor on in which both members are lit in those
+states; same held-out observers and metrics (unresolved: never 3 consecutive such frames resolved). Its tests are a
+separate Holm family.
 Run:    python -m bench run --config transfer          (or transfer_b500)
-Report: python -m bench.experiments.transfer [raw.csv]"""
+Report: python -m bench.experiments.transfer [raw.csv]
+Control (every group skipped must equal uncorrected), same streams and seeds:
+        python -c "from bench.experiments.transfer import allskip; allskip()" """
 from __future__ import annotations
 import csv
 import hashlib
@@ -32,6 +43,7 @@ from bench.experiments import traffic_replay as TR
 from bench.experiments.stability_ablation import Ctx, flicker_of
 from bench.registry import experiment
 from core.observers import heldout_observers, train_observers
+from core.perception import distance as Dst
 from core.server import Corrector
 from core.stabiliser import StabConfig, Stabiliser
 from protocol.io import read_ndjson
@@ -46,8 +58,71 @@ STAGES = ("detect", "decide", "correct", "allocate", "stabilise", "total")
 OUTCOMES = ("min_de00", "success", "infeasible_pairs", "tier2_fallback", "flicker_excess")
 LATENCY = tuple(f"ms_{s}" for s in STAGES)
 TIERS = ("skip", "reuse", "learned", "coarse", "fine")
+TASK = ("task_min_de00", "task_success", "task_unresolved")          # SECONDARY (post-hoc), own Holm family
+SOLVE_MS = ("analysis", "planning", "solving", "correction", "verify")
 CONTEXT = ("n_critical", "uncorrected_min_de00", "unresolved", "tier2_calls", "solves_per_frame", "n_candidates",
-           "candidate_min_ratio") + tuple(f"tier_share_{t}" for t in TIERS)
+           "candidate_min_ratio", "task_n_pairs", "task_uncorrected_min_de00", "task_uncorrected_success",
+           "task_uncorrected_unresolved") + tuple(f"solve_{s}_ms" for s in SOLVE_MS) \
+    + tuple(f"tier_share_{t}" for t in TIERS)
+SIGNALS = ("red", "amber", "green")
+
+
+def task_role(env, o):
+    """-> (family, role) of a LIT indicator; pairs are formed within a family between different roles."""
+    if max(o.emissive_rgb) <= 0:
+        return None
+    if env == "traffic":
+        if o.cls == "light" and o.state in SIGNALS and o.id.startswith("sig_"):
+            return "signal", o.state
+        if o.cls == "indicator" and o.state == "on" and o.id.endswith("_brake"):
+            return "vehicle", "brake"
+        if o.cls == "indicator" and o.state == "hazard":
+            return "vehicle", "hazard"
+    elif o.cls in ("annunciator", "status_lamp") and o.state in SIGNALS:
+        return "lamp", o.state
+    return None
+
+
+def task_pairs(env, snap):
+    """-> sorted keys ((id_a, role_a), (id_b, role_b)) co-lit in this frame, regardless of adjacency."""
+    lamps = sorted((o.id, r) for o in snap.objects if (r := task_role(env, o)))
+    return [((a, ra[1]), (b, rb[1])) for k, (a, ra) in enumerate(lamps) for b, rb in lamps[k + 1:]
+            if ra[0] == rb[0] and ra[1] != rb[1]]
+
+
+def task_metrics(env, ctx, lits, base, k0, n_obs):
+    """SECONDARY metrics over all (task pair, held-out observer); {} when no pair is ever co-lit (censored)."""
+    frames = {}
+    for f in range(k0, len(ctx.snaps)):
+        for key in task_pairs(env, ctx.snaps[f]):
+            frames.setdefault(key, []).append(f)
+    if not frames:
+        return {}
+    acc = {"": [], "uncorrected_": []}
+    for oi in range(n_obs):
+        for prefix, shown in (("", lits), ("uncorrected_", base)):
+            series = {}
+            for f in range(k0, len(ctx.snaps)):
+                keys = task_pairs(env, ctx.snaps[f])
+                if not keys:
+                    continue
+                sc = ctx.scenes[f]
+                ids = sorted({i for k in keys for i, _ in k})
+                at = {i: n for n, i in enumerate(ids)}
+                idx = {i: n for n, i in enumerate(sc.ids)}
+                D = Dst.pair_matrix(np.array([shown[f][i] for i in ids]), **sc.perceive_kw(ctx.held[oi]))
+                for k in keys:
+                    (a, _), (b, _) = k
+                    series.setdefault(k, []).append((float(D[at[a], at[b]]), float(ctx.taus[f][oi][idx[a], idx[b]])))
+            for ser in series.values():
+                ok = [d >= t for d, t in ser]
+                acc[prefix].append((min(d for d, _ in ser), np.mean(ok),
+                                    not any(all(ok[k:k + 3]) for k in range(len(ok) - 2))))
+    out = dict(task_n_pairs=float(len(frames)))
+    for prefix, rows in acc.items():
+        for name, col in zip(("min_de00", "success", "unresolved"), zip(*rows)):
+            out[f"task_{prefix}{name}"] = float(np.mean(col))
+    return out
 
 
 # ---------------------------------------------------------------- streams
@@ -154,6 +229,7 @@ def run_pipeline(snaps, dt, display, table):
     stab.det.detect = _timed(stab.det.detect, acc, "decide")
     stab.pairs.update = _timed(stab.pairs.update, acc, "decide")
     infeasible, tiers = [], {}
+    stage = {k: [] for k in SOLVE_MS}
 
     def solve_fn(s):
         before = cor.solves
@@ -162,6 +238,9 @@ def run_pipeline(snaps, dt, display, table):
             for name, c in ov.diagnostics.tier_counts.items():
                 tiers[name] = tiers.get(name, 0) + c
             acc["allocate"] += ov.diagnostics.allocator_ms
+            for k in SOLVE_MS:
+                if k in ov.diagnostics.stage_latency_ms:
+                    stage[k].append(ov.diagnostics.stage_latency_ms[k])
             infeasible.append(len(an.cue_pairs))        # object pairs still confusable for the solver's observers
         return ov, an
 
@@ -177,11 +256,11 @@ def run_pipeline(snaps, dt, display, table):
         frames.append(dict(detect=acc["detect"], decide=acc["decide"], allocate=acc["allocate"],
                            correct=acc["run"] - acc["allocate"],
                            stabilise=total - acc["detect"] - acc["decide"] - acc["run"], total=total))
-    return dict(shown=shown, frames=frames, infeasible=infeasible, solves=stab.n_solves, tiers=tiers,
+    return dict(shown=shown, frames=frames, infeasible=infeasible, solves=stab.n_solves, tiers=tiers, stage=stage,
                 tier2_calls=t2.calls, tier2_fallbacks=t2.fallbacks)
 
 
-def score(snaps, k0, tr, held, dt):
+def score(snaps, k0, tr, held, dt, env):
     """-> {metric: value} for one stream; pair metrics only when critical pairs exist."""
     table = {o.id: o for o in tr} | {held[0].id: held[0]}
     res = run_pipeline(snaps, dt, held[0], table)
@@ -193,6 +272,8 @@ def score(snaps, k0, tr, held, dt):
     m = dict(n_critical=float(len(crit)), no_critical=float(not crit),
              flicker_excess=flicker_of(lits) - flicker_of(base), solves_per_frame=res["solves"] / n,
              tier2_calls=float(res["tier2_calls"]))
+    m.update({f"solve_{k}_ms": float(np.mean(v)) for k, v in res["stage"].items() if v})
+    m.update(task_metrics(env, ctx, lits, base, k0, len(held)))
     n_cand, ratio = candidates(ctx, k0, n - 1, len(held))
     m["n_candidates"] = float(n_cand)
     if n_cand:
@@ -226,7 +307,46 @@ def run_condition(job):
     snaps, k0, dt = load_stream(env, cond, seed, params)
     if params.get("budget_ms"):                 # secondary run only; default = budget as recorded (40 ms)
         snaps = [s.model_copy(update={"budget_ms": float(params["budget_ms"])}) for s in snaps]
-    return env, cond, score(snaps, k0, tr, held, dt)
+    return env, cond, score(snaps, k0, tr, held, dt, env)
+
+
+def allskip_condition(job):
+    """The same pipeline with a budget too small to plan anything: displayed lit colours vs the originals."""
+    env, cond, seed, params = job
+    tr, held = observers_for(seed, params)
+    snaps, k0, dt = load_stream(env, cond, seed, params)
+    snaps = [s.model_copy(update={"budget_ms": 1e-3}) for s in snaps]
+    table = {o.id: o for o in tr} | {held[0].id: held[0]}
+    res = run_pipeline(snaps, dt, held[0], table)
+    ctx = Ctx(snaps, held[0], table, held[:1])
+    worst, over, n, exact = 0.0, 0, 0, 0
+    for f, (s, shown) in enumerate(zip(snaps, res["shown"])):
+        a, b = ctx.lit(f, {}), ctx.lit(f, shown)
+        d = TR.de00(np.array([a[i] for i in a]), np.array([b[i] for i in a]))
+        worst, over, n = max(worst, float(np.max(d))), over + int(np.sum(d > 0.01)), n + len(a)
+        exact += sum(i not in shown or (np.array_equal(shown[i][0], o.albedo_rgb)
+                                        and np.array_equal(shown[i][1], o.emissive_rgb))
+                     for i, o in ((o.id, o) for o in s.objects))
+    chosen = sum(v for k, v in res["tiers"].items() if k != "skip")
+    return dict(env=env, condition=cond, seed=seed, objects_x_frames=n, max_de00=worst, over_0_01=over,
+                exact=exact, non_skip_plans=chosen)
+
+
+def allskip(config="transfer", out=ROOT / "bench/results/transfer_allskip.csv"):
+    import json
+    cfg = json.loads((ROOT / f"bench/configs/{config}.json").read_text())
+    p = cfg["params"]
+    jobs = [(env, c, s, p) for s in range(int(cfg["n_seeds"])) for env, cs in p["envs"].items() for c in cs]
+    rows = list(_pool(MAX_WORKERS).map(allskip_condition, jobs))
+    with open(out, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w.writeheader()
+        w.writerows(rows)
+    for env in p["envs"]:
+        r = [x for x in rows if x["env"] == env]
+        print(f"{env}: streams={len(r)} object-frames={sum(x['objects_x_frames'] for x in r)} "
+              f"exact={sum(x['exact'] for x in r)} over_0.01dE={sum(x['over_0_01'] for x in r)} "
+              f"max_de00={max(x['max_de00'] for x in r):.3g} non_skip_plans={sum(x['non_skip_plans'] for x in r)}")
 
 
 # ---------------------------------------------------------------- experiment
@@ -318,18 +438,18 @@ def report(raw, out_dir=None):
     groups = {**{e: cs for e, cs in conds.items()}, **{c: [c] for cs in conds.values() for c in cs}}
     table = []
     for name, cs in groups.items():
-        for met in OUTCOMES + LATENCY + CONTEXT:
+        for met in OUTCOMES + TASK + LATENCY + CONTEXT:
             v = list(group_values(data, seeds, cs, met).values())
             row = dict(group=name, metric=met, n=len(v), censored_seeds=len(seeds) - len(v))
             sm = stats.summarize(v) if v else dict(mean=float("nan"), ci_lo=float("nan"), ci_hi=float("nan"))
             table.append(dict(row, mean=sm["mean"], ci_lo=sm["ci_lo"], ci_hi=sm["ci_hi"]))
     tests = []
     for name in ["dashboard", *conds["dashboard"]]:
-        for met in OUTCOMES + LATENCY:
+        for met in OUTCOMES + TASK + LATENCY:
             g = gap(group_values(data, seeds, groups[name], met), group_values(data, seeds, conds["traffic"], met))
-            tests.append(dict(comparison=f"{name} - traffic", metric=met,
-                              family="outcome" if met in OUTCOMES else "latency", **g))
-    for fam in ("outcome", "latency"):                       # Holm within each family, over all comparisons
+            fam = "outcome" if met in OUTCOMES else "secondary_task" if met in TASK else "latency"
+            tests.append(dict(comparison=f"{name} - traffic", metric=met, family=fam, **g))
+    for fam in ("outcome", "latency", "secondary_task"):     # Holm within each family, over all comparisons
         part = [t for t in tests if t["family"] == fam]
         for t, q in zip(part, holm([t["p"] for t in part])):
             t["p_holm"] = float(q) if not np.isnan(t["p"]) else float("nan")
@@ -340,7 +460,9 @@ def report(raw, out_dir=None):
         no_t2 = sum(s not in data.get((c, "tier2_fallback"), {}) for c in cs for s in seeds)
         censor.append(dict(group=name, seeds=len(seeds), seeds_without_critical=int(no_crit),
                            condition_seeds=len(cs) * len(seeds), condition_seeds_without_critical=int(cells),
-                           condition_seeds_without_tier2_calls=int(no_t2)))
+                           condition_seeds_without_tier2_calls=int(no_t2),
+                           condition_seeds_without_task_pairs=sum(s not in data.get((c, "task_success"), {})
+                                                                  for c in cs for s in seeds)))
     out = Path(out_dir) if out_dir else Path(raw).parent
     for suffix, rows in (("table", table), ("tests", tests), ("censoring", censor)):
         with open(out / f"{Path(raw).stem.removesuffix('_raw')}_{suffix}.csv", "w", newline="") as f:
@@ -354,6 +476,13 @@ def print_report(table, tests, censor):
     val = {(r["group"], r["metric"]): r for r in table}
     names = list(dict.fromkeys(r["group"] for r in table))
     cols = OUTCOMES + CONTEXT + LATENCY
+    sec = TASK + tuple(c for c in CONTEXT if c.startswith("task_"))
+    cols = tuple(c for c in cols if c not in sec)
+    print("SECONDARY (task pairs; defined AFTER the primary result)")
+    print("group," + ",".join(sec))
+    for g in names:
+        print(g + "," + ",".join(f"{val[(g, m)]['mean']:.3g}(n{val[(g, m)]['n']})" for m in sec))
+    print("\nPRIMARY and context")
     print("group," + ",".join(cols))
     for g in names:
         print(g + "," + ",".join(f"{val[(g, m)]['mean']:.3g}(n{val[(g, m)]['n']})" for m in cols))

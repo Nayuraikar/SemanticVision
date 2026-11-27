@@ -112,7 +112,10 @@ def solve(snap: Snapshot, obs: Observer, table: dict[str, Observer], cfg_extra: 
     sobs = posterior if robust else solver_observers(obs, table)
     ainfo = None
     if alloc is not None:
-        sol, ainfo = alloc.solve(scene, sobs, cfg, seed=0, t_start=t0)
+        sol, ainfo = alloc.solve(scene, sobs, cfg, seed=0)   # budget_ms = correction stage only
+        st = ainfo["stage_ms"]
+        lat.update(analysis=lat["scene"] + st["analysis"], planning=st["planning"], solving=st["solving"],
+                   correction=st["correction"], verify=st["verify"])
     else:
         sol = solver_correct(scene, sobs, cfg, seed=0)
     t2 = time.perf_counter(); lat["solve"] = (t2 - t1) * 1e3

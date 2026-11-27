@@ -63,7 +63,8 @@ def realised_gain(pb: Problem, D0, crit, P):
 
 class Allocator:
     def __init__(self, tables: Tables | None = "auto", method: str = "lagrangian", bandit=None, tiers=None,
-                 cache: GroupCache | None = None):
+                 cache: GroupCache | None = None, floor_groups: int = 4):
+        self.floor_groups = floor_groups
         self.tables = load_tables() if isinstance(tables, str) else tables
         self.method, self.bandit = method, bandit
         self.tiers = tiers or default_tiers()
@@ -118,11 +119,30 @@ class Allocator:
         self.overhead_ms = 0.8 * self.overhead_ms + 0.2 * el
         pl = Plan(ch, ben, cost, F, B, float(cost[i, ch].sum()), float(ben[i, ch].sum()), el, method or self.method, hits)
         pl._stats = (D0, crit, keys)
+        pl._active, pl._priority = (deficit > 0) & (deg > 0), (im, deficit)
+        return pl
+
+    def apply_floor(self, pl: Plan) -> Plan:
+        """While planned budget remains, the highest-importance confusable groups (ties: larger deficit) get at least
+        tier 1 (cache hit) or tier 2. Not gated on the per-group cost estimate: tier 2 is one forward pass for the whole
+        palette and the table extrapolates far beyond its calibrated scene sizes; the execution deadline still applies
+        to the stages that can be interrupted."""
+        if pl.budget_ms <= 0 or pl.est_cost >= pl.budget_ms:
+            return pl
+        act = np.flatnonzero(pl._active)
+        im, deficit = pl._priority
+        top = act[np.lexsort((-deficit[act], -im[act]))][: self.floor_groups]
+        for g in top:
+            if pl.tiers[g] == 0:
+                pl.tiers[g] = 1 if g in pl.hits else 2
+        i = np.arange(len(pl.tiers))
+        pl.est_cost, pl.est_benefit = float(pl.cost[i, pl.tiers].sum()), float(pl.benefit[i, pl.tiers].sum())
         return pl
 
     # ---- execution ---------------------------------------------------------------------------------------
     def execute(self, pb, plan: Plan, deadline=None):
         P = pb.lab0.copy()
+        skipped = plan.tiers == 0
         keys = plan._stats[2]
         for t in range(1, N_TIERS):                       # cheap tiers first; most valuable groups first within a tier
             gs = np.flatnonzero(plan.tiers == t)
@@ -130,6 +150,8 @@ class Allocator:
                 continue
             gs = gs[np.argsort(-plan.benefit[gs, t])]
             P = self.tiers[t].run(pb, P, gs, deadline, self.cache, keys)
+        P = np.array(P, float)
+        P[skipped] = pb.lab0[skipped]                     # tiers re-project the whole palette; skipped stays original
         return P
 
     def remember(self, pb, plan, P):
@@ -148,26 +170,34 @@ class Allocator:
 
     def solve(self, scene: Scene, observers, cfg: SolverConfig = SolverConfig(), seed=0, t_start=None, importance=None,
               method=None):
-        """-> (Solution, info). Whole call (incl. verification and packaging) stays inside cfg.budget_ms of t_start."""
-        t0 = t_start if t_start is not None else time.perf_counter()
-        hard = t0 + cfg.budget_ms / 1e3
+        """-> (Solution, info). cfg.budget_ms covers the CORRECTION stage only (planning + tier solving), counted from
+        t_start (default: after the problem is built). Problem analysis and final screen verification / packaging are
+        not charged to it; their times are returned in info."""
+        ta = time.perf_counter()
         pb = Problem(scene, observers, cfg)
-        tc = time.perf_counter()
-        screen_check(scene, scene.colors, observers)
-        reserve = 1.5 * (time.perf_counter() - tc)           # verification + packaging must still fit
+        t0 = time.perf_counter()
+        analysis_ms = (t0 - ta) * 1e3
+        t0 = t_start if t_start is not None else t0
+        hard = t0 + cfg.budget_ms / 1e3
         if self.tables is None:                              # uncalibrated: exact fine tier for everything
             pl = self._fallback_plan(pb)
         else:
-            pl = self.plan(pb, (hard - time.perf_counter() - reserve) * 1e3, importance, method)
-        P = self.execute(pb, pl, hard - reserve)
+            pl = self.plan(pb, (hard - time.perf_counter()) * 1e3, importance, method)
+            self.apply_floor(pl)
+        tp = time.perf_counter()
+        P = self.execute(pb, pl, hard)
+        te = time.perf_counter()
         self.remember(pb, pl, P)
         self.feedback(pb, pl, P)
-        sol = _package(scene, pb, P, float(pb.objective(P[None])[0]), t0, 1, observers)
+        sol = _package(scene, pb, P, float(pb.objective(P[None])[0]), ta, 1, observers)
+        tv = time.perf_counter()
         cnt = {TIER_NAMES[t]: int((pl.tiers == t).sum()) for t in range(N_TIERS)}
         t2 = self.tiers[2]
         learned = dict(t2.last, rate=t2.fallback_rate) if (pl.tiers == 2).any() and getattr(t2, "last", None) else None
         return sol, dict(tier_counts=cnt, alloc_ms=pl.alloc_ms, method=pl.method, est_cost=pl.est_cost,
-                         est_benefit=pl.est_benefit, plan=pl, learned=learned)
+                         est_benefit=pl.est_benefit, plan=pl, learned=learned,
+                         stage_ms=dict(analysis=analysis_ms, planning=(tp - t0) * 1e3, solving=(te - tp) * 1e3,
+                                       correction=(te - t0) * 1e3, verify=(tv - te) * 1e3))
 
     def _fallback_plan(self, pb):
         E = pb.E

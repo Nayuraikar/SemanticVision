@@ -86,6 +86,8 @@ class Scene:
     gain: np.ndarray | None = None        # (N,3) irradiance * exposure
     shadow: list | None = None            # (N,) lit|penumbra|shadow
     exposure: float = 1.0
+    alb0: np.ndarray | None = None        # (N,3) authored albedo / emission, returned verbatim for unchanged objects
+    em0: np.ndarray | None = None
 
     @property
     def n_groups(self):
@@ -122,6 +124,8 @@ class Scene:
         sc = cls.build(col, [f"{x.cls}/{x.state}" for x in o], np.maximum(np.sqrt(area) * fov, 0.1), area,
                        bbox_adjacency(xyxy, adj_margin), imp, bg_lum, [x.id for x in o],
                        far_weight=far_weight, brand=brand, tags=[x.task_tags for x in o], **kw)
+        sc.alb0 = np.array([x.albedo_rgb for x in o], float)
+        sc.em0 = np.array([x.emissive_rgb for x in o], float)
         if lighting != "albedo":
             sc.refl, sc.emis = np.array([p[1] for p in parts]), np.array([p[2] for p in parts])
             sc.gain = np.array([p[3] * fld.exposure for p in parts])
@@ -139,19 +143,35 @@ class Scene:
         return kw
 
     def to_overrides(self, colors):
-        """Corrected display colours (N,3) -> (albedo', emissive') per object, inverting the lit model:
-        emissive-dominated objects change their emission (never scaled by irradiance) and keep their albedo;
-        others change albedo and keep their emission. Without lighting info: (colors, None)."""
+        """Corrected display colours (N,3) -> (albedo', emissive') per object, inverting clip(albedo*gain +
+        emissive*exposure). Objects whose colour is the original lit colour get their exact authored values.
+        Emissive-dominated objects change emission (never scaled by irradiance) and keep albedo; others change albedo
+        and keep emission. Per channel, what the preferred term cannot reach goes to the other: below the reflected part
+        -> no emission, lower albedo; below the emitted part -> no albedo, lower emission; above what albedo=1 can
+        reflect -> added emission. A channel that stays clipped at 1 keeps its authored values (HDR preserved).
+        Without lighting info: (colors, None)."""
         c = np.clip(np.asarray(colors, float), 0, 1)
+        same = (np.abs(c - self.colors) <= 1e-9).all(1)[:, None]
         if self.refl is None:
-            return c, None
+            return (c if self.alb0 is None else np.where(same, self.alb0, c)), None
         yl = np.array([0.2126, 0.7152, 0.0722])
         g = np.maximum(self.gain, 1e-9)
+        a0 = self.alb0 if self.alb0 is not None else np.clip(self.refl / g, 0, 1)
+        e0 = self.em0 if self.em0 is not None else self.emis / self.exposure
         use_e = ((self.emis @ yl) > (self.refl @ yl))[:, None]
-        amp = np.maximum((self.emis @ yl) / np.maximum(np.minimum(self.emis, 1) @ yl, 1e-9), 1.0)[:, None]
-        alb = np.where(use_e, np.clip(self.refl / g, 0, 1), np.clip((c - self.emis) / g, 0, 1))
-        em = np.where(use_e, np.maximum(c - self.refl, 0) * amp / self.exposure, self.emis / self.exposure)
-        return alb, em
+        # emissive-dominated: lit = refl + e
+        low = c < self.refl
+        alb_e = np.where(low, np.clip(c / g, 0, 1), a0)
+        lit_e = np.where(low, 0.0, c - self.refl)
+        # albedo-dominated: lit = albedo * gain + emis
+        want = c - self.emis
+        alb_a = np.clip(want / g, 0, 1)
+        lit_a = np.where(want < 0, c, np.where(want > self.gain, c - self.gain, self.emis))
+        alb = np.where(use_e, alb_e, alb_a)
+        em = np.where(use_e, lit_e, lit_a) / self.exposure
+        sat = (c >= 1 - 1e-9) & (self.refl + self.emis >= 1)
+        alb, em = np.where(sat, a0, alb), np.where(sat, e0, em)
+        return np.where(same, a0, alb), np.where(same, e0, em)
 
     def graph(self, obs, colors=None):
         return build_graph(self.colors if colors is None else colors, self.ids, self.size_deg, self.area,

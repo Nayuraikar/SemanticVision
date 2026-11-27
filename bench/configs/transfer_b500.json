@@ -1,4 +1,4 @@
-{"name": "transfer_b500", "experiment": "transfer", "n_seeds": 6,
+{"name": "transfer_b500", "experiment": "transfer", "n_seeds": 5,
  "params": {"envs": {"traffic": ["day", "night", "fog", "rain"], "dashboard": ["normal", "dim", "glare"]},
             "steps": 540, "every": 3, "pre": 10, "post": 40, "n_train": 3, "n_heldout": 4,
             "workers": 4, "prefetch": 8, "budget_ms": 500}}

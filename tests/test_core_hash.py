@@ -1,5 +1,7 @@
-"""Frozen-core proof: the held-out dashboard environment runs on the UNCHANGED core. Baseline written before the
-dashboard was built (tests/fixtures/core_hash.json); any changed, added or removed file fails. No regenerate switch."""
+"""Frozen-core proof: the held-out dashboard environment runs on a frozen core; any changed, added or removed file
+fails. No regenerate switch. core_hash_v1.json (provenance only) was written before the dashboard was built and covers
+the first dashboard transfer run; core_hash.json was written after the two pipeline-integrity fixes (identity round
+trip, budget accounting), which were motivated by toy, synthetic and traffic evidence only."""
 import hashlib
 import json
 from pathlib import Path

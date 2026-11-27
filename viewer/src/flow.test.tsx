@@ -25,6 +25,7 @@ vi.mock("./overlays", () => ({
 
 import { Root } from "./Root";
 import { OBS_KEY } from "./appState";
+import * as dashboardScene from "../../adapters/threejs/scenes/dashboard";
 
 const stat = (m: number) => ({ mean: m, lo: m - 0.1, hi: m + 0.1 });
 const SUMMARY = {
@@ -124,6 +125,23 @@ describe("app flow", () => {
     fireEvent.change(await screen.findByLabelText("observer"), { target: { value: "h0" } });
     await waitFor(() => expect(correctIds()).toContain("h0"));
     expect(localStorage.getItem(OBS_KEY)).toBe("h0");
+  });
+
+  it("dashboard sim has a normal/dim/glare lighting selector", async () => {
+    localStorage.setItem(OBS_KEY, "t0");
+    render(<Root />);
+    await toSim();
+    expect(screen.queryByLabelText("lighting")).toBeNull();
+    fireEvent.change(await screen.findByLabelText("scene"), { target: { value: "dashboard" } });
+    const sel = (await screen.findByLabelText("lighting")) as HTMLSelectElement;
+    expect([...sel.options].map((o) => o.value)).toEqual(["normal", "dim", "glare"]);
+    expect(screen.queryByLabelText("environment")).toBeNull();
+    fireEvent.change(sel, { target: { value: "glare" } });
+    expect(sel.value).toBe("glare");
+    expect(dashboardScene.ENV).toBe("glare");
+    await waitFor(() => expect(calls.some((c) => c.url === "/correct" &&
+      c.body.objects.some((o: any) => o.id === "master_warning"))).toBe(true));
+    dashboardScene.setEnv("normal");
   });
 
   it("saved profile that still exists skips to scenes", async () => {

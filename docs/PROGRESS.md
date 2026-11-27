@@ -117,3 +117,32 @@ Pooled gap dashboard - traffic, paired by seed [95% CI], Holm p (families: outco
 - 40 ms: infeasible -173 [-218,-127] p<.001; flicker -0.07 [-0.65,0.52] p=1; total ms -105 [-127,-82] p<.001. Per condition flicker: dim +0.72 [0.46,0.99] p=.006 (dashboard worse); others n.s.
 - 500 ms: infeasible -126 [-146,-105] p<.001; tier-2 fallback -.52 [-.59,-.45] p<.001; flicker -0.09 [-1.85,1.67] p=1; total ms -190 [-226,-154] p<.001.
 - Stage ms traffic/dashboard (detect, decide, correct, allocate, stabilise): 40 ms 100/92, 2.2/1.5, 118/33, 5.7/1.1, 53/47; 500 ms 92/87, 2.2/1.5, 265/94, 7.7/1.3, 51/44. Welch was only the fallback for unmatched/empty cells; every defined gap had all seeds matched.
+
+## Phase: pipeline integrity fixes (identity, budget) + transfer re-baseline
+- Done: core edited for these two fixes only, motivated by toy/synthetic/traffic evidence. (1) Unchanged groups keep each object's own colour and authored albedo/emissive (previously replaced by the group mean + lossy inverse); changed groups invert exactly, per channel; a target above what albedo=1 reflects ADDS emission. (2) budget_ms = planning + tier solving only; analysis/verification untimed against it; while planned budget remains, the top 4 groups by importance get tier 1/2 even if the cost table (78-100 ms/group extrapolated at ~100 objects) says they do not fit. fixtures/core_hash.json renamed core_hash_v1.json (the FIRST dashboard transfer run used v1; its CSVs are bench/results/transfer*_v1_*); new core_hash.json from the fixed tree. tables.json not recalibrated (calibration never uses the budget). test_robust moved to a 16-object scene (the 8-object one passed only through the identity bug). pytest 214 pass/1 skip, vitest 38, build ok.
+- API: Scene.alb0/em0; solver.{changed_groups,display_colors}; Allocator(floor_groups=4).apply_floor(plan), solve() info["stage_ms"]; Diagnostics.stage_latency_ms += analysis, planning, solving, correction, verify; transfer task_* and solve_*_ms metrics; control `python -c "from bench.experiments.transfer import allskip; allskip()"`; viewer dashboard lighting selector (not checked in a browser).
+- Runs: same observers; transfer 8 seeds 281 s; transfer_b500 6 seeds took 339 s (> 5 min) so cut to 5 seeds (0-4), 227 s. All-skip control (transfer streams): traffic 149760/149760 object-frames exact (max dE00 0); dashboard NOT identical: 110517/111600 exact, 1083 > 0.01 dE00, max 44.9, with 0 non-skip plans. UNFIXED. Cause inferred from code, not isolated: Stabiliser keeps absolute solved colours, so an object changing state without a re-solve shows the old one. Only dashboard evidence, so not acted on; dashboard displayed-colour metrics below may include it.
+- 40 ms: tier 2 runs (calls/stream traffic 5.25, dashboard 4.0; fallback .96/.69) but traffic critical pairs are unaffected: min dE00 = uncorrected (5.89), success 0. Tier shares traffic skip .88, reuse .12, learned .005. Inferred, unverified: the coarse fallback is often past the deadline and returns the screen-failing warm start. Stage ms traffic/dashboard (analysis, planning, solving, correction, verify): 40 ms 39/44, 8.7/5.2, 12/21, 21/26, 24/20; 500 ms 34/43, 10/6.5, 254/283, 264/290, 20/18. Frame (detect, decide, correct, allocate, stabilise): 40 ms 94/86, 2.3/1.5, 104/31, 6.3/1.2, 52/45; 500 ms 82/81, 1.8/1.4, 265/89, 7.3/1.4, 45/42.
+- SECONDARY "task pairs", DEFINED AFTER the primary result (primary censored on dashboard): co-lit emissive indicators in different states, any adjacency, no confusability filter (traffic: red/amber/green signals; brake vs hazard flashers. dashboard: red/amber/green annunciator + status lamps), scored only while both lit; own Holm family. Uncorrected success is at ceiling (~1.00 both envs), so it can show harm, not benefit. Known gaps: wall-clock budgets are not bit-reproducible; primary dashboard censoring persists, so K5 colour-separation transfer is still untested.
+
+Columns: min dE00 / uncorrected min dE00 / success / infeasible per solve / tier-2 fallback / flicker excess / frame ms ("-" = censored; (n) = seeds with pair data; other columns use all seeds).
+
+| condition | 40 ms (primary, 8 seeds) | 500 ms (secondary, 5 seeds) |
+|---|---|---|
+| traffic day | 5.24 / 5.24 / .00 / 208 / .95 / 0.89 / 254 (8) | 5.60 / 5.15 / .38 / 107 / .79 / 5.87 / 370 (5) |
+| traffic night | 6.05 / 6.05 / .00 / 215 / .96 / 2.00 / 284 (5) | 5.77 / 6.84 / .40 / 143 / .85 / 7.57 / 431 (3) |
+| traffic fog | 5.92 / 5.92 / .00 / 252 / .97 / 0.14 / 253 (8) | 11.9 / 6.16 / .78 / 110 / .87 / 8.82 / 410 (5) |
+| traffic rain | 7.75 / 7.75 / .00 / 308 / .97 / 1.81 / 244 (4) | 9.71 / 8.10 / .69 / 123 / .64 / 12.2 / 390 (3) |
+| traffic all | 5.89 / 5.89 / .00 / 246 / .96 / 1.21 / 259 (8) | 8.56 / 6.18 / .58 / 121 / .79 / 8.63 / 400 (5) |
+| dashboard normal | - / - / - / 60 / .69 / 2.16 / 165 | - / - / - / 3.2 / .34 / 6.00 / 233 |
+| dashboard dim | - / - / - / 154 / .63 / -0.50 / 163 | - / - / - / 2.3 / .38 / 6.56 / 187 |
+| dashboard glare | - / - / - / 55 / .73 / 2.02 / 165 | - / - / - / 3.4 / .22 / 4.66 / 221 |
+| dashboard all | - / - / - / 90 / .69 / 1.23 / 164 | - / - / - / 3.0 / .31 / 5.74 / 214 |
+
+SECONDARY, task min dE00 (uncorrected) / success (uncorrected): 40 ms traffic 35.0 (44.6) / 1.00 (1.00), dashboard 34.0 (38.7) / .955 (1.00); 500 ms traffic 34.0 (44.3) / 1.00 (1.00), dashboard 36.2 (38.9) / .999 (1.00).
+
+Gap dashboard - traffic, paired by seed [95% CI], Holm p. Primary min dE00 and success: undefined (censored).
+- 40 ms: infeasible -156 [-198,-114] p<.001; tier-2 fallback -.28 [-.41,-.14] p=.029; flicker +0.02 [-0.61,0.65] p=1; total ms -94 [-109,-80] p<.001. Flicker per condition: dim -1.71 [-2.64,-0.78] p=.044; normal, glare n.s.
+- 500 ms: infeasible -118 [-140,-96] p=.002; tier-2 fallback -.48 [-.67,-.29] p=.030; flicker -2.88 [-3.92,-1.85] p=.021; total ms -186 [-241,-132] p=.013.
+- SECONDARY 40 ms: min dE00 -1.0 [-3.4,1.4] p=1; success -.045 [-.062,-.028] p=.006 (normal -.080 [-.115,-.045] p=.011, glare -.055 [-.080,-.029] p=.015, dim 0); unresolved -.016 [-.053,.021] p=1. 500 ms: min dE00 +2.2 [0.2,4.2] p=.42; success -.001 [-.003,.002] p=1; unresolved 0.
+- Censoring, seed-conditions without a critical pair: 40 ms traffic 7/32 (night 3, rain 4), dashboard 24/24; 500 ms traffic 4/20 (night 2, rain 2), dashboard 15/15. Tier-2-fallback and task-pair cells censored: 0 in both runs.

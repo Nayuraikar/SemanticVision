@@ -79,6 +79,31 @@ def test_pipeline_wrapper_uses_onnx_tier_and_stage_latencies_add_up():
     assert res["tier2_fallbacks"] <= res["tier2_calls"]
 
 
+def test_task_pairs_are_lit_different_state_indicators_regardless_of_adjacency():
+    for env, name in (("traffic", "traffic_day"), ("dashboard", "dashboard_normal")):
+        s = next(iter(read_ndjson(FIX / f"{name}.ndjson", Snapshot)))
+        by = {o.id: o for o in s.objects}
+        pairs = X.task_pairs(env, s)
+        assert pairs
+        for (a, ra), (b, rb) in pairs:
+            assert ra != rb and max(by[a].emissive_rgb) > 0 and max(by[b].emissive_rgb) > 0
+            assert (ra in ("brake", "hazard")) == (rb in ("brake", "hazard"))
+        lamps = {(i, r) for i, r in ((o.id, X.task_role(env, o)) for o in s.objects) if r}
+        n = sum(a[1][0] == b[1][0] and a[1][1] != b[1][1] for a in lamps for b in lamps) // 2
+        assert len(pairs) == n
+
+
+@pytest.mark.parametrize("env,name", [("traffic", "traffic_day"), ("dashboard", "dashboard_normal")])
+def test_score_runs_end_to_end_with_secondary_task_metrics(env, name):
+    tr, held = X.observers_for(1, {"n_heldout": 2})
+    snaps = [s.model_copy(update={"frame": i}) for i, s in enumerate(read_ndjson(FIX / f"{name}.ndjson", Snapshot))]
+    m = X.score(snaps, 1, tr, held, 0.1, env)
+    assert m["task_n_pairs"] > 0 and {"solve_analysis_ms", "solve_correction_ms", *X.TASK} <= set(m)
+    for k in ("task_success", "task_uncorrected_success", "task_unresolved"):
+        assert 0 <= m[k] <= 1
+    assert m["task_min_de00"] >= 0 and m["task_uncorrected_min_de00"] >= 0
+
+
 def test_escalation_window_anchor():
     snaps = list(read_ndjson(FIX / "dashboard_dim.ndjson", Snapshot))
     cut, k0 = X.escalation_window(snaps, 1, 2)

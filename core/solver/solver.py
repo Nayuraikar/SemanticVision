@@ -89,10 +89,28 @@ def screen_check(scene: Scene, obj_rgb, observers, frac: float = 0.0):
     return sorted(bad), sorted(p for k in bad for p in ids[k])
 
 
+SAME_LAB = 1e-2      # max per-axis Lab difference at which a palette entry counts as not changed by the solver
+
+
+def changed_groups(pb: Problem, P):
+    """(E,) bool: entries the solver moved. An entry left at the original, or only at its constraint projection
+    (L*/gamut bounds), is unchanged."""
+    P = np.asarray(P, float)
+    base = pb.project(pb.lab0[None])[0]
+    return (np.abs(P - pb.lab0).max(-1) > SAME_LAB) & (np.abs(P - base).max(-1) > SAME_LAB)
+
+
+def display_colors(pb: Problem, P):
+    """Per-object display colours: members of changed entries take the entry colour, all others keep their exact own."""
+    ch = changed_groups(pb, P)[pb.scene.groups]
+    rgb = pb.to_rgb(pb.project(np.asarray(P, float)[None])[0])
+    return np.where(ch[:, None], rgb[pb.scene.groups], pb.scene.colors)
+
+
 def _package(scene, pb, P, obj, t0, attempts, observers, fail=None):
     X = pb.project(np.asarray(P)[None])[0]
     rgb = pb.to_rgb(X)
-    colors = rgb[scene.groups]
+    colors = display_colors(pb, P)
     gp, ip = screen_check(scene, colors, observers) if fail is None else fail
     cues, bad = assign_cues(gp, VOCAB[: pb.cfg.n_cues])
     return Solution(colors, rgb, X, float(obj), gp, ip, cues, bad, attempts, (time.perf_counter() - t0) * 1e3,
@@ -114,8 +132,7 @@ def correct(scene: Scene, observers, cfg: SolverConfig = SolverConfig(), seed=0)
     P, obj = coordinate_descent(pb, deadline=deadline)
     best, att = None, 0
     for att in range(cfg.retries + 1):
-        X = pb.project(P[None])[0]
-        fail = screen_check(scene, pb.to_rgb(X)[scene.groups], observers, frac)
+        fail = screen_check(scene, display_colors(pb, P), observers, frac)
         if best is None or len(fail[0]) < len(best[2][0]):
             best = (P.copy(), obj, fail)
         if not fail[0] or time.perf_counter() > deadline or att == cfg.retries:
