@@ -10,3 +10,4 @@
 - Final reply format: max 8 lines = files created, test result, open issues.
 - At the end of each phase, append 5 lines to docs/PROGRESS.md (done / API signatures / known gaps).
 - Read docs/PROGRESS.md at the start of each phase instead of re-reading old code.
+- If a bench or test takes more than 5 minutes, do NOT re-engineer it: cut seeds/data/epochs and note the limit in PROGRESS.md. Never spend more than one attempt on runtime optimisation.

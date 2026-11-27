@@ -71,10 +71,10 @@ describe("traffic intersection (Rapier, fixed step, seeded)", () => {
     const beacon = snaps.slice(k).map((s) => obj(s, "hazard_beacon")!);
     expect(beacon.every((x) => x && x.task_tags!.includes("hazard"))).toBe(true);
     expect(new Set(beacon.map((x) => x.emissive_rgb!.join())).size).toBeGreaterThan(1);
-    expect(Math.max(...beacon[0].emissive_rgb!)).toBeGreaterThan(1);
+    expect(Math.max(...beacon.map((x) => x.emissive_rgb![0]))).toBeGreaterThan(0.9);
     expect(obj(after, "smoke")).toBeDefined();
     const ind = snaps.slice(k).map((s) => obj(s, `${a}_ind`)!.emissive_rgb![0]);
-    expect(Math.max(...ind)).toBeGreaterThan(1);
+    expect(Math.max(...ind)).toBeGreaterThan(0.9);
     expect(Math.min(...ind)).toBe(0);
     // nearby objects got the importance bump (hazard tag) and react
     const near = after.objects!.filter((o) => o.task_tags!.includes("near_collision"));
@@ -86,7 +86,7 @@ describe("traffic intersection (Rapier, fixed step, seeded)", () => {
     expect(trig.some((x) => x.object_id === a && (x.data as any).trigger === "box_junction")).toBe(true);
     expect(snaps.some((s) => s.events!.some((x) => x.type === "state_change" && (x.data as any).to === "crossing"))).toBe(true);
     // brake lights: some vehicle brakes (brake light emissive on) before the crash
-    expect(snaps.slice(0, k).some((s) => s.objects!.some((o) => o.id.endsWith("_brake") && o.state === "on" && o.emissive_rgb![0] > 1))).toBe(true);
+    expect(snaps.slice(0, k).some((s) => s.objects!.some((o) => o.id.endsWith("_brake") && o.state === "on" && o.emissive_rgb![0] > 0.9))).toBe(true);
   });
 
   it("normal flow has no collisions and cycles signals red/green/amber", async () => {
@@ -134,6 +134,37 @@ describe("traffic intersection (Rapier, fixed step, seeded)", () => {
       expect(saved.length).toBe(4);
       saved.forEach((s, i) => close(snaps[i], s, `${env}.${i}`));
     }
+  });
+
+  it("real-world colour conventions: rear lamp cluster, roadworks, hedges, bystanders, unclipped lamp hues", async () => {
+    const c = await findCollisionStep({ seed: 1, scenario: "collision", env: "day" });
+    const { snaps } = await recordTraffic({ seed: 1, scenario: "collision", env: "day", steps: c + 40, exportEvery: 2, startStep: c - 20 });
+    const k = snaps.findIndex((s) => s.events!.some((e) => e.type === "collision"));
+    const after = snaps[snaps.length - 1];
+    const ev = snaps[k].events!.find((e) => e.type === "collision")!;
+    for (const id of [ev.object_id!, (ev.data as any).other as string]) {
+      expect(obj(after, `${id}_brake`)!.state).toBe("on");                  // foot stays on the brake
+      expect(obj(after, `${id}_ind_r`)!.state).toBe("hazard");              // rear amber flasher under the brake light
+      const rear = snaps.slice(k).map((s) => obj(s, `${id}_ind_r`)!.emissive_rgb!);
+      expect(rear.some((e) => e[0] === 0)).toBe(true);
+      const on = rear.find((e) => e[0] > 0)!;
+      expect(on[1] / on[0]).toBeGreaterThan(0.3); expect(on[1] / on[0]).toBeLessThan(0.5);   // amber, not clipped yellow
+    }
+    const ids = new Set(after.objects!.map((o) => o.id));
+    for (const id of ["hedge_nw_e", "hedge_se_s", "cone_0", "works_lamp", "worker0", "worker1", "bystander0"]) expect(ids.has(id), id).toBe(true);
+    for (const o of after.objects!.filter((o) => o.class === "light" && o.state !== "off" && o.state !== "flashing" && o.state !== "hazard")) {
+      expect(Math.max(...o.emissive_rgb!)).toBeLessThanOrEqual(1);         // signals: peak channel 1, hue preserved
+    }
+    expect(obj(after, "worker0")!.task_tags).toEqual(expect.arrayContaining(["hazard", "near_collision", "roadworks"]));
+    expect(obj(snaps[0], "worker0")!.task_tags).not.toContain("hazard");
+    const nearBy = after.objects!.filter((o) => o.id.startsWith("bystander") && !o.id.endsWith("_head") && o.task_tags!.includes("near_collision"));
+    expect(nearBy.length).toBeGreaterThan(0);
+    // bystander clothes are seeded: same seed same colours, reset clears the hazard tags
+    const s1 = new TrafficSim({ seed: 5, scenario: "collision", env: "day" }), s2 = new TrafficSim({ seed: 5, scenario: "collision", env: "day" });
+    const cols = (s: TrafficSim) => exportSnapshot(s.scene, s.camera, { frame: 0, t: 0, observerId: "x", budgetMs: 1 }).objects!
+      .filter((o) => o.id.startsWith("bystander")).map((o) => o.albedo_rgb);
+    expect(cols(s1)).toEqual(cols(s2));
+    s1.physics?.free(); s2.physics?.free();
   });
 
   it("registry scene builds and steps via the accumulator", async () => {

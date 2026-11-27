@@ -15,7 +15,7 @@ export interface TrafficOpts { seed: number; scenario: Scenario; env: EnvName; a
 const LANE = 2, ROAD_HALF = 4, CW = 6, STOP_U = -7.5, SPAWN_U = -50, DESPAWN_U = 50;
 const VEH_HALF = { len: 2.1, h: 0.7, w: 0.95 };
 const A_UP = 2.5, A_DOWN = 6, A_PLAN = 3;
-export const NEAR_R = 12;          // nearby radius for the hazard / importance bump
+export const NEAR_R = 15;          // nearby radius for the hazard / importance bump (crash scene incl. stop-line queues)
 const FLASH_HZ = 1.5;
 
 type Axis = "ew" | "ns";
@@ -41,14 +41,24 @@ export function signalAt(t: number): { ew: Light; ns: Light; phase: number; inPh
   return { ew: "red", ns: "red", phase: 5, inPhase: 0 };
 }
 
-const LAMP_EMIT: Record<Light, V3> = { red: [4, 0.15, 0.05], amber: [4, 1.6, 0.05], green: [0.1, 3.2, 1.2] };
+// Lamp emission in display-linear sRGB at ECE/SAE chromaticities (red x.69 y.31, amber x.575 y.425, signal green
+// bluish), peak channel 1.0 so day exposure keeps the hue instead of clipping amber to yellow / green to cyan.
+const LAMP_EMIT: Record<Light, V3> = { red: [1.0, 0.03, 0.02], amber: [1.0, 0.38, 0.0], green: [0.02, 0.85, 0.4] };
 const LAMP_LENS: Record<Light, V3> = { red: [0.25, 0.02, 0.02], amber: [0.3, 0.18, 0.02], green: [0.02, 0.2, 0.08] };
-const BRAKE_ON: V3 = [3, 0.08, 0.04], AMBER_ON: V3 = [3, 1.2, 0.05], ZERO: V3 = [0, 0, 0];
+const BRAKE_ON: V3 = [1.0, 0.03, 0.02], AMBER_ON: V3 = [1.0, 0.38, 0.0], ZERO: V3 = [0, 0, 0];
+const BRAKE_LENS: V3 = [0.3, 0.02, 0.02], AMBER_LENS: V3 = [0.35, 0.2, 0.02];
+// Real-world colour conventions (linear albedo). Car paints: red, maroon/brown, dark green, orange, taxi yellow
+// next to the common white/silver/black/blue. Safety orange cones (~sRGB 255,100,0), fluorescent hi-vis orange and
+// yellow-green vests (EN ISO 20471), privet/box hedge green.
 const CAR_COLOURS: V3[] = [
-  [0.55, 0.04, 0.03], [0.08, 0.3, 0.06], [0.3, 0.28, 0.05], [0.3, 0.12, 0.04],
-  [0.05, 0.1, 0.45], [0.7, 0.7, 0.68], [0.25, 0.25, 0.26], [0.7, 0.5, 0.03],
+  [0.55, 0.04, 0.03], [0.08, 0.3, 0.06], [0.22, 0.08, 0.03], [0.3, 0.12, 0.04],
+  [0.05, 0.1, 0.45], [0.7, 0.7, 0.68], [0.25, 0.25, 0.26], [0.7, 0.5, 0.03], [0.75, 0.2, 0.02], [0.03, 0.03, 0.03],
 ];
-const CLOTHES: V3[] = [[0.6, 0.05, 0.05], [0.1, 0.35, 0.08], [0.45, 0.35, 0.05], [0.1, 0.12, 0.5], [0.5, 0.5, 0.5]];
+const CLOTHES: V3[] = [[0.6, 0.05, 0.05], [0.1, 0.35, 0.08], [0.45, 0.35, 0.05], [0.1, 0.12, 0.5], [0.5, 0.5, 0.5],
+  [0.2, 0.22, 0.07], [0.4, 0.33, 0.18], [0.22, 0.1, 0.04], [0.3, 0.03, 0.05], [0.7, 0.2, 0.03]];   // + olive, khaki, brown, burgundy, orange
+const BYSTANDERS: [number, number][] = [[-7.6, -4.7], [-4.7, -7.8], [7.6, -4.7], [-7.6, 4.7], [-4.7, 7.6], [4.8, -7.8]];
+const CONE: V3 = [0.8, 0.12, 0.01], HIVIS_ORANGE: V3 = [0.9, 0.18, 0.02], HIVIS_YELLOW: V3 = [0.6, 0.85, 0.02];
+const HEDGE: V3 = [0.05, 0.18, 0.03], WORKWEAR: V3 = [0.03, 0.04, 0.12];
 
 const add3 = (a: V3, b: V3, k = 1): V3 => [a[0] + k * b[0], a[1] + k * b[1], a[2] + k * b[2]];
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -70,7 +80,7 @@ function setEmissive(m: SVMesh, e: V3) {
 }
 
 interface Vehicle {
-  id: string; ap: Approach; mesh: SVMesh; brake: SVMesh; ind: SVMesh; half: V3;
+  id: string; ap: Approach; mesh: SVMesh; brake: SVMesh; ind: SVMesh; indR: SVMesh; half: V3;
   v: number; cruise: number; runner: boolean; ignoreObs: boolean; halt: boolean; damaged: boolean; hazard: boolean;
 }
 interface Ped {
@@ -103,6 +113,9 @@ export class TrafficSim {
   private lamps = new Map<string, { mesh: SVMesh; axis: Axis; colour: Light }>();
   private collided = new Set<string>();
   private hazardObjs: SVMesh[] = [];
+  private workers: SVMesh[] = [];
+  private bystanders: SVMesh[] = [];
+  private worksLamps: SVMesh[] = [];
   private nextVeh = 0;
   private lastLight: Record<Axis, Light | null> = { ew: null, ns: null };
 
@@ -148,6 +161,42 @@ export class TrafficSim {
       put(mesh(new THREE.CylinderGeometry(0.25, 0.3, 3, 10), [0.2, 0.12, 0.06], { id: `${id}_trunk`, cls: "bark" }), [p[0], 1.65, p[2]]);
       put(mesh(new THREE.SphereGeometry(2, 16, 12), [0.06, 0.25, 0.04], { id: `${id}_canopy`, cls: "vegetation" }), [p[0], 4.5, p[2]]);
     }
+    // hedges / bushes on the corners
+    put(mesh(new THREE.BoxGeometry(5, 1.1, 0.9), HEDGE, { id: "hedge_se_e", cls: "vegetation" }), [13, 0.7, 5.6]);
+    put(mesh(new THREE.BoxGeometry(0.9, 1.1, 6.5), HEDGE, { id: "hedge_se_s", cls: "vegetation" }), [5.2, 0.7, 8.75]);
+    // kerbside hedges bordering the NW / NE / SW corner plots (behind the junction from the camera)
+    const hedges: [string, V3, V3][] = [
+      ["hedge_nw_e", [-11.5, 0.75, -6], [8, 1.2, 0.9]], ["hedge_nw_n", [-6, 0.75, -11.5], [0.9, 1.2, 8]],
+      ["hedge_ne_w", [11.5, 0.75, -6], [8, 1.2, 0.9]], ["hedge_sw_e", [-11.5, 0.75, 6], [8, 1.2, 0.9]],
+    ];
+    for (const [id, p, s] of hedges) put(mesh(new THREE.BoxGeometry(...s), HEDGE, { id, cls: "vegetation" }), p);
+    // utility works on the SE corner: cones along the kerb, flashing amber barrier lamp, two hi-vis workers
+    [[4.6, 4.6], [6, 4.5], [7.5, 4.5], [9, 4.5], [10.5, 4.5], [12, 4.5]].forEach(([x, z], i) => {
+      put(mesh(new THREE.CylinderGeometry(0.05, 0.2, 0.7, 12), CONE, { id: `cone_${i}`, cls: "cone", tags: ["roadworks"] }), [x, 0.5, z]);
+    });
+    const barrier = put(mesh(new THREE.BoxGeometry(2.2, 0.25, 0.08), [0.7, 0.7, 0.68], { id: "works_barrier", cls: "barrier", tags: ["roadworks"] }), [7.5, 0.85, 7.5]);
+    barrier.rotation.y = Math.PI / 4;
+    const lamp = mesh(new THREE.SphereGeometry(0.12, 10, 8), AMBER_LENS, { id: "works_lamp", cls: "light", state: "flashing", tags: ["roadworks", "signal"] }, ZERO);
+    put(lamp, [7.5, 1.12, 7.5]);
+    this.worksLamps.push(lamp);
+    for (const [i, x, z, vest] of [[0, 8.6, 6.4, HIVIS_ORANGE], [1, 6.4, 8.6, HIVIS_YELLOW]] as [number, number, number, V3][]) {
+      const legs = mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.85, 10), WORKWEAR, { id: `worker${i}_legs`, cls: "clothing" });
+      put(legs, [x, 0.575, z]);
+      const torso = mesh(new THREE.CylinderGeometry(0.3, 0.28, 0.65, 10), vest, { id: `worker${i}`, cls: "worker", state: "working", tags: ["roadworks", "vulnerable"] });
+      put(torso, [x, 1.33, z]);
+      const head = mesh(new THREE.SphereGeometry(0.17, 12, 8), [0.55, 0.36, 0.26], { id: `worker${i}_head`, cls: "skin" });
+      put(head, [x, 1.84, z]);
+      this.workers.push(torso);
+    }
+    // bystanders standing on the corners (clothes re-drawn per seed in reset)
+    BYSTANDERS.forEach(([x, z], i) => {
+      const body = mesh(new THREE.CylinderGeometry(0.27, 0.27, 1.25, 10), CLOTHES[0], { id: `bystander${i}`, cls: "pedestrian", state: "standing", tags: ["vulnerable"] });
+      const head = mesh(new THREE.SphereGeometry(0.17, 12, 8), [0.55, 0.36, 0.26], { id: `bystander${i}_head`, cls: "skin" });
+      head.position.set(0, 0.82, 0);
+      body.add(head);
+      put(body, [x, 0.775, z]);
+      this.bystanders.push(body);
+    });
     const yel: V3 = [0.7, 0.5, 0.03];
     put(mesh(new THREE.BoxGeometry(100, 0.02, 0.2), yel, { id: "mark_e", cls: "road_marking" }), [ROAD_HALF + 4 + 50, 0.02, 0]);
     put(mesh(new THREE.BoxGeometry(100, 0.02, 0.2), yel, { id: "mark_w", cls: "road_marking" }), [-(ROAD_HALF + 4 + 50), 0.02, 0]);
@@ -188,6 +237,7 @@ export class TrafficSim {
     this.collisionPoint = null; this.step = 0; this.nextVeh = 0; this.stepper = new FixedStep(DT);
     this.lastLight = { ew: null, ns: null };
     this.scene.userData.svEvents = [];
+    for (const w of this.workers) w.userData.sv.tags = ["roadworks", "vulnerable"];
     const rng = (this.rng = new Rng(this.opts.seed * 7919 + (this.opts.scenario === "collision" ? 1 : 0)));
     const P = this.physics;
     for (const cw of CROSSWALKS) {
@@ -236,6 +286,11 @@ export class TrafficSim {
       P.addMover(id, pos, [0.28, 0.6, 0.28], G_PED);
       this.peds.push(p);
     });
+    for (const b of this.bystanders) {        // drawn last: traffic / pedestrian randomness unchanged
+      b.userData.sv.tags = ["vulnerable"];
+      b.material.color.setRGB(...rng.pick(CLOTHES));
+      delete b.userData.svOrig;
+    }
     this.updateSignals();
   }
 
@@ -266,17 +321,20 @@ export class TrafficSim {
     const body = mesh(new THREE.BoxGeometry(2 * VEH_HALF.len, 2 * VEH_HALF.h, 2 * VEH_HALF.w), s.colour,
       { id, cls: "car", state: "moving", tags: s.runner ? ["vehicle", "runner"] : ["vehicle"] }, undefined, 0.4);
     body.rotation.y = Math.atan2(-ap.dir[2], ap.dir[0]);
-    const brake = mesh(new THREE.BoxGeometry(0.06, 0.2, 1.5), [0.3, 0.02, 0.02], { id: `${id}_brake`, cls: "indicator", state: "off", tags: ["signal"] }, ZERO);
+    const brake = mesh(new THREE.BoxGeometry(0.06, 0.2, 1.5), BRAKE_LENS, { id: `${id}_brake`, cls: "indicator", state: "off", tags: ["signal"] }, ZERO);
     brake.position.set(-VEH_HALF.len - 0.04, 0.25, 0);
-    const ind = mesh(new THREE.BoxGeometry(0.06, 0.14, 1.7), [0.35, 0.2, 0.02], { id: `${id}_ind`, cls: "indicator", state: "off", tags: ["signal"] }, ZERO);
+    const ind = mesh(new THREE.BoxGeometry(0.06, 0.14, 1.7), AMBER_LENS, { id: `${id}_ind`, cls: "indicator", state: "off", tags: ["signal"] }, ZERO);
     ind.position.set(VEH_HALF.len + 0.04, 0.2, 0);
-    body.add(brake, ind);
+    // rear amber indicator directly below the brake light (rear lamp cluster); flashes with the front one
+    const indR = mesh(new THREE.BoxGeometry(0.06, 0.1, 1.5), AMBER_LENS, { id: `${id}_ind_r`, cls: "indicator", state: "off", tags: ["signal"] }, ZERO);
+    indR.position.set(-VEH_HALF.len - 0.04, 0.1, 0);
+    body.add(brake, ind, indR);
     body.position.set(...pos);
     this.scene.add(body);
     const half: V3 = ap.axis === "ew" ? [VEH_HALF.len, VEH_HALF.h, VEH_HALF.w] : [VEH_HALF.w, VEH_HALF.h, VEH_HALF.len];
     const rb = this.physics!.addMover(id, pos, half, G_VEH);
     rb.setLinvel({ x: ap.dir[0] * s.speed, y: 0, z: ap.dir[2] * s.speed }, true);
-    this.vehicles.push({ id, ap, mesh: body, brake, ind, half, v: s.speed, cruise: s.speed, runner: !!s.runner,
+    this.vehicles.push({ id, ap, mesh: body, brake, ind, indR, half, v: s.speed, cruise: s.speed, runner: !!s.runner,
       ignoreObs: !!s.ignoreObs, halt: false, damaged: false, hazard: false });
   }
 
@@ -379,13 +437,13 @@ export class TrafficSim {
       v.damaged = true; v.hazard = true; v.v = 0;
       this.physics!.bodies.get(v.id)!.setLinearDamping(2.5);
       this.setState(v.mesh, "damaged");
-      this.setState(v.brake, "off"); setEmissive(v.brake, ZERO);
-      this.setState(v.ind, "hazard");
+      this.setState(v.brake, "on"); setEmissive(v.brake, BRAKE_ON);     // foot stays on the brake after impact
+      this.setState(v.ind, "hazard"); this.setState(v.indR, "hazard");
       this.addTags(v.mesh, ["hazard", "collision"]);
-      this.addTags(v.ind, ["hazard"]);
+      this.addTags(v.ind, ["hazard"]); this.addTags(v.indR, ["hazard"]);
     }
     // hazard indicators at the crash site
-    const beacon = mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), [0.3, 0.05, 0.02], { id: "hazard_beacon", cls: "light", state: "hazard", tags: ["hazard"] }, AMBER_ON);
+    const beacon = mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), AMBER_LENS, { id: "hazard_beacon", cls: "light", state: "hazard", tags: ["hazard"] }, AMBER_ON);
     beacon.position.set(mid[0] + 1.5, 2.6, mid[2] + 1.5);
     const smoke = mesh(new THREE.SphereGeometry(1, 16, 12), [0.16, 0.15, 0.15], { id: "smoke", cls: "smoke", state: "rising", tags: ["hazard"] }, undefined, 1);
     smoke.position.set(mid[0], 1.6, mid[2]);
@@ -399,7 +457,11 @@ export class TrafficSim {
       if (Math.hypot(p[0] - mid[0], p[2] - mid[2]) > NEAR_R) continue;
       v.halt = true; v.hazard = true;
       this.addTags(v.mesh, ["hazard", "near_collision"]);
-      this.setState(v.ind, "hazard");
+      this.setState(v.ind, "hazard"); this.setState(v.indR, "hazard");
+    }
+    for (const w of [...this.workers, ...this.bystanders]) {
+      if (Math.hypot(w.position.x - mid[0], w.position.z - mid[2]) > NEAR_R) continue;
+      this.addTags(w, ["hazard", "near_collision"]);
     }
     for (const p of this.peds) {
       const q = this.posOf(p.id);
@@ -436,15 +498,17 @@ export class TrafficSim {
     for (const v of [...this.vehicles]) {
       const p = this.posOf(v.id);
       v.mesh.position.set(...p);
-      if (v.hazard) setEmissive(v.ind, flash ? AMBER_ON : ZERO);
+      if (v.hazard) { setEmissive(v.ind, flash ? AMBER_ON : ZERO); setEmissive(v.indR, flash ? AMBER_ON : ZERO); }
       if (!v.damaged && dot(p, v.ap.dir) > DESPAWN_U) {
         this.scene.remove(v.mesh); P.remove(v.id);
         this.vehicles.splice(this.vehicles.indexOf(v), 1);
       }
     }
     for (const p of this.peds) p.mesh.position.set(...this.posOf(p.id));
+    const worksOn = Math.floor(this.time * 2) % 2 === 0;     // road-works warning lamp, 1 Hz
+    for (const l of this.worksLamps) setEmissive(l, worksOn ? AMBER_ON : ZERO);
     for (const h of this.hazardObjs) {
-      if (h.userData.sv.id === "hazard_beacon") setEmissive(h, flash ? [4, 0.2, 0.05] : AMBER_ON);
+      if (h.userData.sv.id === "hazard_beacon") setEmissive(h, flash ? ZERO : AMBER_ON);
       else {
         const s = Math.min(2.5, h.scale.x + 0.5 * DT);
         h.scale.setScalar(s); h.position.y = 1.6 + 0.5 * s;
