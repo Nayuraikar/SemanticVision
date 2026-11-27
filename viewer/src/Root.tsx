@@ -1,8 +1,11 @@
 import { useEffect, useState } from "react";
 import { App } from "./App";
 import { Calibration } from "./Calibration";
-import { AppStateProvider, PROFILE_PREFIX, go, loadSavedObserver, parseHash, saveObserver, useAppState, useHash } from "./appState";
+import { AppStateProvider, PROFILE_PREFIX, go, loadSavedObserver, parseHash, saveObserver, useAppState, useHash, type Route } from "./appState";
 import { ObserverStep, ScenePicker, Welcome, fetchObservers, fetchProfiles } from "./screens";
+import { PrefsProvider } from "./ui/prefs";
+import { ScreenTransition } from "./ui/ScreenTransition";
+import { Shell } from "./ui/Shell";
 
 async function savedStillExists(id: string): Promise<boolean> {
   try {
@@ -40,17 +43,25 @@ function Router() {
   }, [booting, route, needsObserver, hash, observerId]);
   useEffect(() => { if (route?.name === "sim") setScene(route.sceneId); }, [route && route.name === "sim" ? route.sceneId : null, setScene]);
 
-  if (booting || !route || needsObserver) return null;
-  switch (route.name) {
-    case "welcome": return <Welcome />;
-    case "observer": return <ObserverStep />;
-    case "calibrate":
-      return <Calibration onBack={() => go("#/observer")} onFinish={(pid) => { setObserver(`${PROFILE_PREFIX}${pid}`); go("#/scenes"); }} />;
-    case "scenes": return <ScenePicker />;
-    case "sim": return <App sceneId={route.sceneId} />;
-  }
+  const ready = !booting && !!route && !needsObserver;
+  const screenFor = (r: Route) => {
+    switch (r.name) {
+      case "welcome": return <Welcome />;
+      case "observer": return <ObserverStep />;
+      case "calibrate":
+        return <Calibration onBack={() => go("#/observer")} onFinish={(pid) => { setObserver(`${PROFILE_PREFIX}${pid}`); go("#/scenes"); }} />;
+      case "scenes": return <ScenePicker />;
+      case "sim": return <App sceneId={r.sceneId} />;
+    }
+  };
+  // the shell (and its live background) stays mounted across every route
+  return (
+    <Shell route={ready ? route : null}>
+      {ready && <ScreenTransition screenKey={route.name}>{screenFor(route)}</ScreenTransition>}
+    </Shell>
+  );
 }
 
 export function Root() {
-  return <AppStateProvider><Router /></AppStateProvider>;
+  return <PrefsProvider><AppStateProvider><Router /></AppStateProvider></PrefsProvider>;
 }

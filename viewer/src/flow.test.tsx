@@ -77,7 +77,7 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 const correctIds = () => calls.filter((c) => c.url === "/correct").map((c) => c.body.observer_id);
 
 async function toSim() {
-  await screen.findByText("Choose a scene");
+  await screen.findByText("Choose a scene to explore");
   for (const t of ["Cockpit", "ICU", "Construction site", "Rail / airport"]) {
     const card = screen.getByText(t).closest("div")!;
     expect(card.querySelector("button")!.disabled).toBe(true);
@@ -148,7 +148,7 @@ describe("app flow", () => {
     profiles.push(profileRow("abc123"));
     localStorage.setItem(OBS_KEY, "profile:abc123");
     render(<Root />);
-    await screen.findByText("Choose a scene");
+    await screen.findByText("Choose a scene to explore");
     expect(location.hash).toBe("#/scenes");
   });
 

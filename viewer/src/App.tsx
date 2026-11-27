@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { watchVisibility } from "./ui/budget";
+import { useShell } from "./ui/shellContext";
 import * as THREE from "three";
 import {
   applyOverrides, exportSnapshot, getScene, postCorrect, SCENES, type Overrides, type Snapshot,
@@ -26,6 +29,8 @@ const OVERLAYS: [keyof OverlayFlags, string][] = [
 export function App({ sceneId }: { sceneId: string }) {
   const glRef = useRef<HTMLCanvasElement>(null);
   const ovRef = useRef<HTMLCanvasElement>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const { barSlot, overlaySlot } = useShell();
   const { observerId, setObserver } = useAppState();
   const obsId = observerId ?? "";
   const [presets, setPresets] = useState<PresetObs[]>([]);
@@ -67,7 +72,10 @@ export function App({ sceneId }: { sceneId: string }) {
     const prev = new Map<string, [number, number]>();
     let frame = 0, prevT: number | undefined, raf = 0, busy = false, lastSnap: Snapshot | null = null, lastOv: Overrides | null = null;
     let lastHud = 0;
+    let visible = true;
+    const unwatch = watchVisibility(viewRef.current!, (v) => { visible = v; });
     const loop = (ms: number) => {
+      if (!visible) { raf = requestAnimationFrame(loop); return; } // no GPU work or solves while off-screen
       const t = ms / 1000;
       def.step(scene, t);
       stat.begin();
@@ -89,76 +97,93 @@ export function App({ sceneId }: { sceneId: string }) {
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
-    return () => { cancelAnimationFrame(raf); panels.dispose(); panelsRef.current = null; };
+    const canvas = glRef.current!;
+    return () => {
+      cancelAnimationFrame(raf); unwatch(); panels.dispose(); panelsRef.current = null;
+      // release the context only once the canvas has left the page (it is reused on scene/env switches)
+      queueMicrotask(() => { if (!canvas.isConnected) panels.renderer.forceContextLoss?.(); });
+    };
   }, [sceneId, env, lighting]);
 
   const d = ov?.diagnostics;
   const f1 = (x: number | null | undefined) => (x == null ? "-" : x.toFixed(1));
-  const box: React.CSSProperties = { border: "1px solid #444", padding: 6, minWidth: 190, background: "#181818" };
   const optGroup = (label: string, xs: PresetObs[]) => (
     <optgroup label={label}>
       {xs.map((o) => <option key={o.id} value={o.id}>{`${o.id} ${o.model}/${o.kind} ${o.severity.toFixed(2)}`}</option>)}
     </optgroup>
   );
-  return (
-    <div style={{ padding: 12 }}>
-      <div style={{ marginBottom: 6 }}>
-        scene:{" "}
+  const barControls = (
+    <>
+      <label className="sv-pill"><span>scene</span>
         <select aria-label="scene" value={sceneId} onChange={(e) => go(simPath(e.target.value))}>
           {SCENES.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
-        </select>{" "}
-        {sceneId === trafficScene.id && (<>
-          env:{" "}
+        </select>
+      </label>
+      {sceneId === trafficScene.id && (
+        <label className="sv-pill"><span>env</span>
           <select aria-label="environment" value={env}
             onChange={(e) => { const v = e.target.value as EnvName; trafficScene.setEnv(v); setEnvState(v); }}>
             {ENVS.map((x) => <option key={x} value={x}>{x}</option>)}
-          </select>{" "}
-        </>)}
-        {sceneId === dashboardScene.id && (<>
-          lighting:{" "}
+          </select>
+        </label>
+      )}
+      {sceneId === dashboardScene.id && (
+        <label className="sv-pill"><span>lighting</span>
           <select aria-label="lighting" value={lighting}
             onChange={(e) => { const v = e.target.value as DashLighting; dashboardScene.setEnv(v); setLightingState(v); }}>
             {DASH_LIGHTINGS.map((x) => <option key={x} value={x}>{x}</option>)}
-          </select>{" "}
-        </>)}
-        <a href="#/scenes" style={{ color: "#8cf" }}>all scenes</a>{" | "}
-        <button onClick={() => go("#/calibrate")}>re-run calibration</button>{" | "}
-        observer:{" "}
+          </select>
+        </label>
+      )}
+      <label className="sv-pill"><span>observer</span>
         <select aria-label="observer" value={obsId} onChange={(e) => setObserver(e.target.value)}>
           {!presets.some((o) => o.id === obsId) && !profiles.some((p) => p.observer_id === obsId) && <option value={obsId}>{obsId}</option>}
           {optGroup("train", presets.filter((o) => o.split === "train"))}{optGroup("held-out", presets.filter((o) => o.split !== "train"))}
           <optgroup label="saved profiles">
             {profiles.map((p) => <option key={p.id} value={p.observer_id}>{`${p.observer_id} ${p.kind} ${p.severity.toFixed(2)}`}</option>)}
           </optgroup>
-        </select>{" "}
-        {OVERLAYS.map(([k, label]) => (
-          <label key={k} style={{ marginLeft: 8 }}>
-            <input type="checkbox" checked={flags[k]} onChange={(e) => setFlags({ ...flags, [k]: e.target.checked })} />{label}
-          </label>
-        ))}
-        {(["tier", "latency", "stats", "posterior"] as const).map((k) => (
-          <label key={k} style={{ marginLeft: 8 }}>
-            <input type="checkbox" checked={hud.show[k]} onChange={(e) => setHud({ show: { ...hud.show, [k]: e.target.checked } })} />{k}
-          </label>
-        ))}
+        </select>
+      </label>
+      <button className="sv-pill" onClick={() => go("#/calibrate")}>re-run calibration</button>
+    </>
+  );
+  const overlayControls = (
+    <>
+      {OVERLAYS.map(([k, label]) => (
+        <label key={k}>
+          <input type="checkbox" checked={flags[k]} onChange={(e) => setFlags({ ...flags, [k]: e.target.checked })} />{label}
+        </label>
+      ))}
+      {(["tier", "latency", "stats", "posterior"] as const).map((k) => (
+        <label key={k}>
+          <input type="checkbox" checked={hud.show[k]} onChange={(e) => setHud({ show: { ...hud.show, [k]: e.target.checked } })} />{k}
+        </label>
+      ))}
+    </>
+  );
+  return (
+    <div className="sv-sim">
+      {barSlot && createPortal(barControls, barSlot)}
+      {overlaySlot && createPortal(overlayControls, overlaySlot)}
+      <div className="sv-glass sv-stage">
+        <div className="sv-stage-labels">
+          {["A original", "B simulated CVD (original)", "C corrected → CVD"].map((t) => <div key={t}>{t}</div>)}
+        </div>
+        <div className="sv-stage-view" ref={viewRef}>
+          <canvas ref={glRef} width={PW * 3} height={PH} />
+          <canvas ref={ovRef} width={PW * 3} height={PH} style={{ pointerEvents: "none" }} />
+        </div>
       </div>
-      <div style={{ display: "flex", width: PW * 3, color: "#aaa" }}>
-        {["A original", "B simulated CVD (original)", "C corrected → CVD"].map((t) => <div key={t} style={{ width: PW }}>{t}</div>)}
-      </div>
-      <div style={{ position: "relative", width: PW * 3, height: PH }}>
-        <canvas ref={glRef} width={PW * 3} height={PH} style={{ width: PW * 3, height: PH, display: "block" }} />
-        <canvas ref={ovRef} width={PW * 3} height={PH} style={{ position: "absolute", left: 0, top: 0, pointerEvents: "none" }} />
-      </div>
-      <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-        {hud.show.tier && <div style={box}>solver tier: {d?.solver_tier ?? "-"}<br />status: {status}<br />
+      <div className="sv-hud">
+        {hud.show.tier && <div className="sv-glass">solver tier: {d?.solver_tier ?? "-"}<br />status: {status}<br />
           flags: {d?.fallback_flags?.join(",") || "-"}<br />cues: {ov?.cues?.length ?? 0} | pairs: {ov?.confusion_pairs?.length ?? 0}
           {" "}(infeasible {ov?.confusion_pairs?.filter((p) => !p.feasible).length ?? 0})</div>}
-        {hud.show.latency && <div style={box}>latency ms<br />
+        {hud.show.latency && <div className="sv-glass">latency ms<br />
           {Object.entries(d?.stage_latency_ms ?? {}).map(([k, v]) => <div key={k}>{k}: {v.toFixed(2)}</div>)}</div>}
-        {hud.show.stats && <div style={box}>fps {f1(stats?.fps)} | frame {f1(stats?.frameMs)} ms<br />
+        {hud.show.stats && <div className="sv-glass">fps {f1(stats?.fps)} | frame {f1(stats?.frameMs)} ms<br />
           GPU {stats?.gpuMs == null ? "n/a" : `${stats.gpuMs.toFixed(2)} ms`} | heap {f1(stats?.heapMB)} MB<br />
           calls {stats?.calls ?? "-"} | tris {stats?.triangles ?? "-"}<br />geom {stats?.geometries ?? "-"} | tex {stats?.textures ?? "-"}</div>}
-        {hud.show.posterior && <div style={{ ...box, color: "#777" }}>observer posterior<br />(placeholder — Phase 5)<br />
+        {hud.show.posterior && <div className="sv-glass" style={{ color: "var(--sv-text-dim)" }}>observer posterior<br />(placeholder — Phase 5)<br />
           selected: {obsId || "-"}</div>}
       </div>
     </div>

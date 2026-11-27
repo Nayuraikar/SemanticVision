@@ -57,11 +57,8 @@ export function Calibration({ onFinish, onBack }: { onFinish?: (profileId: strin
     await next(pid);
   });
 
-  const page: React.CSSProperties = { maxWidth: 760, margin: "0 auto", padding: 20, font: "14px system-ui, sans-serif", lineHeight: 1.5 };
-  const btn: React.CSSProperties = { padding: "8px 18px", fontSize: 14, marginRight: 8, cursor: "pointer" };
-
   return (
-    <div style={page}>
+    <div className="sv-calib">
       <h2 style={{ marginTop: 0 }}>Colour discrimination calibration</h2>
       <p style={{ opacity: 0.8 }}>{NOTE} <a href="#/observer" style={{ color: "#8cf" }} onClick={(e) => { if (onBack) { e.preventDefault(); onBack(); } }}>back</a></p>
       {err && <p style={{ color: "#f88" }}>{err}</p>}
@@ -84,7 +81,7 @@ export function Calibration({ onFinish, onBack }: { onFinish?: (profileId: strin
             </label>))}
           </div>
           <p>Use a normal-brightness screen, avoid glare and keep colour filters (night mode) off.</p>
-          <button style={btn} disabled={busy} onClick={start}>Start</button>
+          <button className="sv-btn" disabled={busy} onClick={start}>Start</button>
         </div>
       )}
 
@@ -98,20 +95,20 @@ export function Calibration({ onFinish, onBack }: { onFinish?: (profileId: strin
           </div>
           {stim.mode === "same_different" ? (
             <p>Do the two patches look the same colour?{" "}
-              <button style={btn} disabled={busy} onClick={() => answer("same")}>Same</button>
-              <button style={btn} disabled={busy} onClick={() => answer("different")}>Different</button></p>
+              <button className="sv-btn" disabled={busy} onClick={() => answer("same")}>Same</button>
+              <button className="sv-btn" disabled={busy} onClick={() => answer("different")}>Different</button></p>
           ) : (
             <p>How different do they look?<br />
               <input type="range" min={0} max={1} step={0.25} value={slider} style={{ width: 320 }}
                 onChange={(e) => setSlider(Number(e.target.value))} /> {sliderLabel(slider)}<br />
-              <button style={btn} disabled={busy} onClick={() => answer(slider)}>Submit</button></p>
+              <button className="sv-btn" disabled={busy} onClick={() => answer(slider)}>Submit</button></p>
           )}
-          <button style={btn} disabled={busy || prog.n === 0} onClick={() => finish(pid)}>Finish now</button>
+          <button className="sv-btn" disabled={busy || prog.n === 0} onClick={() => finish(pid)}>Finish now</button>
         </div>
       )}
 
       {phase === "summary" && profile && <SummaryView s={profile.summary} pid={pid} />}
-      {phase === "summary" && profile && onFinish && <p><button style={btn} onClick={() => onFinish(pid)}>Use this profile and choose a scene</button></p>}
+      {phase === "summary" && profile && onFinish && <p><button className="sv-btn sv-btn-primary" onClick={() => onFinish(pid)}>Use this profile and choose a scene</button></p>}
     </div>
   );
 }
