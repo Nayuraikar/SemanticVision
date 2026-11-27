@@ -69,6 +69,8 @@ class TriggerDetector:
         for e in snap.events:
             if e.type in ("enter_view", "collision", "state_change", "lighting_change"):
                 fired.add(e.type)
+            elif e.type == "trigger_enter":     # physics trigger volume: a semantic state change
+                fired.add("state_change")
         if new_pairs:
             fired.add("new_pair")
         return [t for t in ORDER if t in fired]

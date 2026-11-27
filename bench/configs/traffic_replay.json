@@ -1,0 +1,4 @@
+{"name": "traffic_replay", "experiment": "traffic_replay", "n_seeds": 4, "baseline": "none",
+ "params": {"envs": ["day", "night", "fog", "rain"], "steps": 540, "every": 3, "pre": 10, "post": 40,
+            "n_train": 3, "n_heldout": 4, "compute_frames": 1,
+            "solver": {"step_min": 0.1, "retries": 0}, "workers": 8}}

@@ -27,7 +27,7 @@ export type DominantLight = {
 };
 
 export type Event = {
-  "type": "state_change" | "collision" | "enter_view" | "exit_view" | "lighting_change";
+  "type": "state_change" | "collision" | "enter_view" | "exit_view" | "lighting_change" | "trigger_enter";
   "object_id"?: string | null;
   "data"?: Record<string, unknown>;
 };
@@ -38,6 +38,8 @@ export type SHLighting = {
   "dominant"?: DominantLight | null;
   "white_point"?: [number, number, number];
   "exposure"?: number;
+  "fog_density"?: number | null;
+  "fog_rgb"?: [number, number, number] | null;
 };
 
 export type SceneObject = {

@@ -77,12 +77,14 @@ const correctIds = () => calls.filter((c) => c.url === "/correct").map((c) => c.
 
 async function toSim() {
   await screen.findByText("Choose a scene");
-  for (const t of ["Traffic", "Dashboard", "Cockpit", "ICU", "Construction site", "Rail / airport"]) {
+  for (const t of ["Dashboard", "Cockpit", "ICU", "Construction site", "Rail / airport"]) {
     const card = screen.getByText(t).closest("div")!;
     expect(card.querySelector("button")!.disabled).toBe(true);
     expect(card.textContent).toContain("Coming soon");
   }
-  fireEvent.click(screen.getByText("Open"));
+  const traffic = screen.getByText("Traffic intersection").closest("div")!;
+  expect(traffic.querySelector("button")!.disabled).toBe(false);
+  fireEvent.click(screen.getByText("Toy scene").closest("div")!.querySelector("button")!);
   await waitFor(() => expect(location.hash).toBe("#/sim/toy"));
 }
 

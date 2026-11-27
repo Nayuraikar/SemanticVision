@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 SCHEMA_VERSION = "1.0"
 
 RGB = Annotated[tuple[float, float, float], Field(description="linear RGB in [0,1]")]
-EventType = Literal["state_change", "collision", "enter_view", "exit_view", "lighting_change"]
+EventType = Literal["state_change", "collision", "enter_view", "exit_view", "lighting_change", "trigger_enter"]
 CueType = Literal["outline", "hatch", "icon", "label"]
 SolverTier = Literal["exact", "learned", "cached", "fallback", "none", "allocated"]
 
@@ -81,6 +81,8 @@ class SHLighting(_Base):
     dominant: Optional[DominantLight] = None
     white_point: tuple[float, float, float] = (0.9505, 1.0, 1.089)  # XYZ, D65
     exposure: float = Field(1.0, gt=0)
+    fog_density: Optional[float] = Field(None, ge=0, description="exp2 fog density (1/m); None = no fog")
+    fog_rgb: Optional[RGB] = None
 
 
 class AmbientDominantLighting(_Base):

@@ -15,3 +15,7 @@ export async function postCorrect(baseUrl: string, snap: Snapshot): Promise<Over
   return (await r.json()) as Overrides;
 }
 export * from "./scenes/registry";
+export * from "./physics";
+export * from "./rng";
+export * from "./environments";
+export * from "./trafficSim";

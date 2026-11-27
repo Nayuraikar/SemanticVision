@@ -68,6 +68,7 @@ export function applyOverrides(scene: THREE.Object3D, ov: Overrides): void {
     m.userData.svOrig ??= originalColors(m);
     const orig = m.userData.svOrig as ReturnType<typeof originalColors>;
     const p = po.get(id);
+    m.userData.svHasOv = !!p;   // animated scenes may keep writing authored colours to un-overridden meshes
     const a = p ? p.albedo : orig.albedo;
     const e = p?.emissive ?? orig.emissive;
     m.material.color.setRGB(a[0], a[1], a[2]);

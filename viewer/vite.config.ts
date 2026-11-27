@@ -7,7 +7,12 @@ const nm = (p: string) => path.resolve(__dirname, "node_modules", p);
 export default defineConfig({
   plugins: [react()],
   // adapters/threejs lives outside viewer/, so its bare imports must resolve here
-  resolve: { alias: { three: nm("three"), react: nm("react"), "react-dom": nm("react-dom") } },
+  resolve: {
+    alias: {
+      three: nm("three"), react: nm("react"), "react-dom": nm("react-dom"),
+      "@dimforge/rapier3d-compat": nm("@dimforge/rapier3d-compat"),
+    },
+  },
   server: { port: 5173, fs: { allow: [".."] } },
   test: { include: ["../adapters/threejs/**/*.test.ts", "src/**/*.test.{ts,tsx}"], environment: "node" },
 });

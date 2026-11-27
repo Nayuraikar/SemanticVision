@@ -242,7 +242,8 @@
             "collision",
             "enter_view",
             "exit_view",
-            "lighting_change"
+            "lighting_change",
+            "trigger_enter"
           ],
           "title": "Type",
           "type": "string"
@@ -343,6 +344,46 @@
           "exclusiveMinimum": 0,
           "title": "Exposure",
           "type": "number"
+        },
+        "fog_density": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "exp2 fog density (1/m); None = no fog",
+          "title": "Fog Density"
+        },
+        "fog_rgb": {
+          "anyOf": [
+            {
+              "description": "linear RGB in [0,1]",
+              "maxItems": 3,
+              "minItems": 3,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fog Rgb"
         }
       },
       "required": [

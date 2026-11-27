@@ -31,7 +31,7 @@ describe("scene registry", () => {
   it("planned scenes are disabled cards", () => {
     const cards = sceneCards();
     const dis = cards.filter((c) => c.disabled).map((c) => c.id);
-    expect(dis).toEqual(["traffic", "dashboard", "cockpit", "icu", "construction", "rail-airport"]);
+    expect(dis).toEqual(["dashboard", "cockpit", "icu", "construction", "rail-airport"]);
     expect(cards.find((c) => c.id === "toy")!.disabled).toBe(false);
   });
 

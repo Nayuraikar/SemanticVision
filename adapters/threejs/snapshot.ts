@@ -1,6 +1,6 @@
 // Three.js adapter: export per-frame Snapshot (SPEC 4.2). Engine code lives only here.
 import * as THREE from "three";
-import type { SceneObject, Snapshot } from "./protocol.gen";
+import type { Event, SceneObject, Snapshot } from "./protocol.gen";
 import { exportLightingSH, irradiance, litColor, shadowVisibility } from "./lighting";
 import { SCHEMA_VERSION } from "./protocol.gen";
 
@@ -77,6 +77,15 @@ export function exportSnapshot(scene: THREE.Scene, camera: THREE.PerspectiveCame
   for (const m of meshes) centroid.add(new THREE.Vector3().setFromMatrixPosition(m.matrixWorld));
   if (meshes.length) centroid.divideScalar(meshes.length);
   const lighting = exportLightingSH(scene, centroid);
+  // environment preset (scene.userData.svEnv) + Three fog: exposure, white point, exp2 fog density
+  const env = scene.userData.svEnv as { exposure?: number; white_point?: Vec3 } | undefined;
+  if (env?.exposure) lighting.exposure = env.exposure;
+  if (env?.white_point) lighting.white_point = env.white_point;
+  const fog = scene.fog as THREE.FogExp2 | null;
+  if (fog && (fog as THREE.FogExp2).isFogExp2) {
+    lighting.fog_density = r6(fog.density);
+    lighting.fog_rgb = fog.color.toArray().slice(0, 3).map((v) => r6(c01(v))) as Vec3;
+  }
   for (const m of meshes) {
     const tag = m.userData.sv as SVTag;
     // geometry-only box: cue children (outline, labels) must not inflate the exported bbox
@@ -130,13 +139,18 @@ export function exportSnapshot(scene: THREE.Scene, camera: THREE.PerspectiveCame
       shadow_vis: vis,
     });
   }
+  // physics/scene events queued since the last export (scene.userData.svEvents); drained, kept only for exported ids
+  const queued = (scene.userData.svEvents ?? []) as Event[];
+  scene.userData.svEvents = [];
+  const ids = new Set(objects.map((x) => x.id));
+  const events = queued.filter((e) => e.object_id == null || ids.has(e.object_id));
   return {
     schema_version: SCHEMA_VERSION,
     frame: o.frame,
     t: r6(o.t),
     objects,
     lighting,
-    events: [],
+    events,
     observer_id: o.observerId,
     budget_ms: o.budgetMs,
   };

@@ -1,16 +1,16 @@
 import * as toy from "./toy";
+import * as traffic from "./traffic";
 import type { PlannedScene, SceneCard, SceneDef } from "./types";
 
 export type { PlannedScene, SceneCard, SceneDef } from "./types";
 
-export const SCENES: SceneDef[] = [toy];
+export const SCENES: SceneDef[] = [toy, traffic];
 
 const planned = (id: string, title: string, description: string, tags: string[]): PlannedScene => ({
   id, title, description, tasks: [], tags,
 });
 
 export const PLANNED: PlannedScene[] = [
-  planned("traffic", "Traffic", "Junction with signals, brake lights and road markings.", ["traffic", "signals"]),
   planned("dashboard", "Dashboard", "Status dashboard with colour-coded gauges and alerts.", ["ui", "status"]),
   planned("cockpit", "Cockpit", "Flight deck annunciators and warning lights.", ["aviation", "annunciator"]),
   planned("icu", "ICU", "Bedside monitors and alarm indicators.", ["medical", "alarms"]),

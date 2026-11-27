@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 
 CLASSES = ("car", "light", "sign", "pedestrian", "indicator", "wall")
-STATE_CRIT = {"collided": 1.0, "fault": 1.0, "red": 0.9, "warn": 0.8, "amber": 0.7, "green": 0.3, "ok": 0.2,
+STATE_CRIT = {"collided": 1.0, "damaged": 1.0, "fault": 1.0, "red": 0.9, "warn": 0.8, "amber": 0.7, "green": 0.3, "ok": 0.2,
               "off": 0.1, "default": 0.2}
 FEATURE_NAMES = [f"cls_{c}" for c in CLASSES] + ["state_crit", "change_rate", "speed", "collision", "log_area",
                                                  "depth", "hazard", "signal", "info", "ecc"]
