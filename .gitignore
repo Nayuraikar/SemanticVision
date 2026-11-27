@@ -15,3 +15,5 @@ bench/logs/
 viewer/dist/
 node_modules/
 .venv/
+learning/cache/
+learning/artifacts/*.pt

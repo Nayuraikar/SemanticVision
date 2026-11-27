@@ -164,8 +164,10 @@ class Allocator:
         self.feedback(pb, pl, P)
         sol = _package(scene, pb, P, float(pb.objective(P[None])[0]), t0, 1, observers)
         cnt = {TIER_NAMES[t]: int((pl.tiers == t).sum()) for t in range(N_TIERS)}
+        t2 = self.tiers[2]
+        learned = dict(t2.last, rate=t2.fallback_rate) if (pl.tiers == 2).any() and getattr(t2, "last", None) else None
         return sol, dict(tier_counts=cnt, alloc_ms=pl.alloc_ms, method=pl.method, est_cost=pl.est_cost,
-                         est_benefit=pl.est_benefit, plan=pl)
+                         est_benefit=pl.est_benefit, plan=pl, learned=learned)
 
     def _fallback_plan(self, pb):
         E = pb.E

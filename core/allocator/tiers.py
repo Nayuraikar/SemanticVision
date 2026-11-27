@@ -109,5 +109,10 @@ class FineExact(_Exact):
     over = dict(grid=5, sweeps=2, max_iter=60, step_min=0.02)
 
 
-def default_tiers():
-    return [Skip(), Reuse(), LearnedStandIn(), CoarseExact(), FineExact()]
+def default_tiers(learned: str = "auto"):
+    """learned: 'auto' (ONNX tier if core/allocator/learned.onnx + onnxruntime exist and SV_LEARNED != standin) | 'standin'."""
+    t2 = None
+    if learned == "auto":
+        from .onnx_tier import load_learned_tier
+        t2 = load_learned_tier()
+    return [Skip(), Reuse(), t2 or LearnedStandIn(), CoarseExact(), FineExact()]

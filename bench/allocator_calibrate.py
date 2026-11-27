@@ -104,7 +104,7 @@ def fit(rows) -> Tables:
     return Tables(cost, gain, {"decay_de": float(min(max(-1 / slope if slope < -1e-9 else 60.0, 1.0), 60.0))}, meta)
 
 
-def main(n_seeds=8):
+def main(n_seeds=6):
     t0 = time.time()
     OUT.mkdir(exist_ok=True)
     for name, base, n in (("allocator_tier_rows", 7000, n_seeds), ("allocator_heldout_rows", 9000, max(4, n_seeds // 2))):
@@ -122,4 +122,4 @@ def main(n_seeds=8):
 
 
 if __name__ == "__main__":
-    main(int(sys.argv[1]) if len(sys.argv) > 1 else 8)
+    main(int(sys.argv[1]) if len(sys.argv) > 1 else 6)        # 6 seeds keeps the run < 5 min with the ONNX tier 2
