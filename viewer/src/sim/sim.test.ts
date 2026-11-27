@@ -119,7 +119,8 @@ describe("effects", () => {
     const on = { ...DEFAULT_FX, cinematic: true };
     expect(DEFAULT_FX.cinematic).toBe(false);
     expect(effectiveFx(on, cinematicBlockers(clean, hud), false, false).cinematic).toBe(true);
-    expect(effectiveFx(on, cinematicBlockers(DEFAULT_FLAGS, hud), false, false).cinematic).toBe(false);
+    expect(Object.values(DEFAULT_FLAGS).some(Boolean)).toBe(false);
+    expect(effectiveFx(on, cinematicBlockers({ ...DEFAULT_FLAGS, graph: true }, hud), false, false).cinematic).toBe(false);
     expect(cinematicBlockers(clean, { ...hud, latency: true })).toEqual(["latency"]);
     expect(effectiveFx(on, [], true, false)).toMatchObject({ cinematic: false, dust: false, weather: false, animate: false });
   });

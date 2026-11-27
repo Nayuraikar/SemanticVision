@@ -29,7 +29,6 @@ export function Shell({ route, children }: { route: Route | null; children: Reac
   const [flying, setFlying] = useState(false);
   const [thumbs, setThumbs] = useState<Record<string, string>>({});
   const [barSlot, setBarSlot] = useState<HTMLElement | null>(null);
-  const [overlaySlot, setOverlaySlot] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
     if (!hasWebGL() || !canvas.current) return;
@@ -68,14 +67,14 @@ export function Shell({ route, children }: { route: Route | null; children: Reac
     return engine.flyTo(sceneId);
   }, [engine, fallback, still]);
 
-  const value = useMemo(() => ({ barSlot, overlaySlot, flyTo, thumbs }), [barSlot, overlaySlot, flyTo, thumbs]);
+  const value = useMemo(() => ({ barSlot, flyTo, thumbs }), [barSlot, flyTo, thumbs]);
   return (
     <ShellContext.Provider value={value}>
       <div className="sv-backdrop" data-testid="backdrop" aria-hidden="true"
         data-mode={flying && mode === "picker" ? "hero" : mode} data-fallback={fallback}>
         <canvas ref={canvas} />
       </div>
-      <TopBar route={route} barSlot={setBarSlot} overlaySlot={setOverlaySlot} />
+      <TopBar route={route} barSlot={setBarSlot} />
       <main className="sv-main">{children}</main>
     </ShellContext.Provider>
   );

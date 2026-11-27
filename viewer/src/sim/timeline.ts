@@ -74,7 +74,7 @@ export type KeyAction = "toggle" | "back" | "forward" | null;
 /** Shortcuts stay out of the way of form controls that use the same keys. */
 export function keyAction(key: string, target: { tagName?: string; type?: string; role?: string | null } | null): KeyAction {
   const tag = target?.tagName ?? "", type = target?.type ?? "";
-  if (tag === "SELECT" || tag === "TEXTAREA" || target?.role === "radio") return null;
+  if (tag === "SELECT" || tag === "TEXTAREA" || target?.role === "radio" || target?.role === "slider") return null;
   if (tag === "INPUT" && type !== "range" && type !== "checkbox") return null;
   if (key === " ") return tag === "BUTTON" || type === "checkbox" ? null : "toggle";
   return key === "ArrowLeft" ? "back" : key === "ArrowRight" ? "forward" : null;

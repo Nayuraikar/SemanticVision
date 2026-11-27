@@ -13,7 +13,7 @@ uniform float uBlend;
 uniform mat3 uM, uP1, uP2, uRGB2LMS, uLMS2RGB;
 uniform vec3 uNsep;
 uniform float uSign1;
-uniform bool uSim;        // false = passthrough (panel A)
+uniform float uSim;       // CVD cross-fade: 0 = passthrough (view A), 1 = fully simulated
 varying vec2 vUv;
 
 vec3 linearToSrgb(vec3 c) {
@@ -32,6 +32,6 @@ vec3 simulate(vec3 rgb) {
 }
 void main() {
   vec3 c = texture2D(uTex, vUv).rgb;
-  if (uSim) c = simulate(c);
+  if (uSim > 0.0) c = mix(c, simulate(c), uSim);
   gl_FragColor = vec4(linearToSrgb(c), 1.0);
 }`;

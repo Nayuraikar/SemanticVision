@@ -1,10 +1,11 @@
-// Three-panel renderer: one scene state, A original | B CVD(original) | C CVD(corrected).
-// Per frame: render original colours -> RT_orig (A,B), apply overrides -> RT_corr (C), composite via CVD shader.
+// View renderer: one scene state, A original | B CVD(original) | C CVD(corrected), laid out as tiles.
+// Per frame: original colours -> RT_orig (A,B), overrides -> RT_corr (C), composite each tile via the CVD shader.
 import * as THREE from "three";
 import { svMeshes, originalColors, type Overrides, type SVMesh } from "../../adapters/threejs";
 import { FRAG, VERT } from "./shaders";
 import { Cinematic } from "./sim/cinematic";
 import { buildCvdUniforms, IDENTITY_CVD, type CvdUniforms, type ObserverLike } from "./cvd";
+import { isVisible, type Rect, type Tile } from "./sim/view/layout";
 
 type Mode = "orig" | "corr";
 
@@ -22,14 +23,15 @@ export class ThreePanels {
   private pal = new Map<string, [number, number, number]>();
   private cvd: CvdUniforms = IDENTITY_CVD;
   private post: Cinematic | null = null;
+  private w = 1;
+  private h = 1;
+  private ratio = 1;
 
-  constructor(canvas: HTMLCanvasElement, readonly pw: number, readonly ph: number) {
+  constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
-    this.renderer.setPixelRatio(1);
-    this.renderer.setSize(pw * 3, ph, false);
     this.renderer.autoClear = true;
-    this.renderer.info.autoReset = false; // 4 passes/frame: report whole-frame counts
-    const mk = () => new THREE.WebGLRenderTarget(pw, ph, { type: THREE.HalfFloatType, depthBuffer: true });
+    this.renderer.info.autoReset = false; // several passes per frame: report whole-frame counts
+    const mk = () => new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: true, samples: 2 });
     this.rtOrig = mk(); this.rtCorr = mk();
     for (const rt of [this.rtOrig, this.rtCorr]) rt.texture.colorSpace = THREE.LinearSRGBColorSpace;
     this.mat = new THREE.ShaderMaterial({
@@ -38,13 +40,21 @@ export class ThreePanels {
         uTex: { value: null }, uMode: { value: 0 }, uKind: { value: 0 }, uSeverity: { value: 0 }, uBlend: { value: 0 },
         uM: { value: new THREE.Matrix3() }, uP1: { value: new THREE.Matrix3() }, uP2: { value: new THREE.Matrix3() },
         uRGB2LMS: { value: new THREE.Matrix3() }, uLMS2RGB: { value: new THREE.Matrix3() },
-        uNsep: { value: new THREE.Vector3() }, uSign1: { value: 1 }, uSim: { value: true },
+        uNsep: { value: new THREE.Vector3() }, uSign1: { value: 1 }, uSim: { value: 0 },
       },
     });
     this.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.mat);
     this.quad.frustumCulled = false;
     this.qScene.add(this.quad);
     this.setObserver(null);
+  }
+
+  /** Canvas size in CSS px; the caller passes a pixel ratio already capped for the WebGL budget. */
+  resize(w: number, h: number, ratio: number) {
+    this.w = w; this.h = h; this.ratio = ratio;
+    this.renderer.setPixelRatio(ratio);
+    this.renderer.setSize(w, h, false);
+    this.post?.dispose(); this.post = null; // rebuilt at the new size on the next cinematic frame
   }
 
   setObserver(o: ObserverLike | null) {
@@ -79,45 +89,52 @@ export class ThreePanels {
     }
   }
 
-  render(scene: THREE.Scene, camera: THREE.PerspectiveCamera, fx?: PanelFx) {
+  /** `targetW`: width the shared scene image is rendered at (CSS px), the settled tile width. */
+  render(scene: THREE.Scene, camera: THREE.PerspectiveCamera, tiles: Tile[], targetW: number, fx?: PanelFx) {
     const r = this.renderer;
     r.info.reset();
     const prevTM = r.toneMapping;
     r.toneMapping = THREE.NoToneMapping;
+    const rw = Math.max(1, Math.round(targetW * this.ratio)), rh = Math.max(1, Math.round(this.h * this.ratio));
+    for (const rt of [this.rtOrig, this.rtCorr]) if (rt.width !== rw || rt.height !== rh) rt.setSize(rw, rh);
+    const shown = tiles.filter(isVisible);
     this.show(scene, "orig");
-    r.setRenderTarget(this.rtOrig); r.clear(); r.render(scene, camera);
-    this.show(scene, "corr");
-    r.setRenderTarget(this.rtCorr); r.clear(); r.render(scene, camera);
-    this.show(scene, "orig");
-    if (fx?.cinematic) this.post ??= new Cinematic(r, this.pw * 3, this.ph);
+    if (shown.some((t) => t.pane !== "C")) { r.setRenderTarget(this.rtOrig); r.clear(); r.render(scene, camera); }
+    if (shown.some((t) => t.pane === "C")) {
+      this.show(scene, "corr");
+      r.setRenderTarget(this.rtCorr); r.clear(); r.render(scene, camera);
+      this.show(scene, "orig");
+    }
+    if (fx?.cinematic) this.post ??= new Cinematic(r, this.w, this.h, this.ratio);
     else if (this.post) { this.post.dispose(); this.post = null; }
     const out = this.post?.input ?? null;
-    r.setRenderTarget(null);
-    r.setScissorTest(true);
-    const panels: [THREE.WebGLRenderTarget, boolean][] = [[this.rtOrig, false], [this.rtOrig, true], [this.rtCorr, true]];
-    panels.forEach(([rt, sim], i) => {
-      if (out) {
-        out.viewport.set(i * this.pw, 0, this.pw, this.ph);
-        out.scissor.set(i * this.pw, 0, this.pw, this.ph);
-        out.scissorTest = true;
-        r.setRenderTarget(out);
-      } else {
-        r.setViewport(i * this.pw, 0, this.pw, this.ph);
-        r.setScissor(i * this.pw, 0, this.pw, this.ph);
-      }
-      this.mat.uniforms.uTex.value = rt.texture;
-      this.mat.uniforms.uSim.value = sim;
+    // viewport units: CSS px on the canvas (three applies the ratio), device px on a render target
+    const k = out ? this.ratio : 1;
+    const place = (view: Rect, clip: Rect) => {
+      const v = [view.x * k, (this.h - view.y - view.h) * k, view.w * k, view.h * k] as const;
+      const c = [clip.x * k, (this.h - clip.y - clip.h) * k, clip.w * k, clip.h * k] as const;
+      if (out) { out.viewport.set(...v); out.scissor.set(...c); out.scissorTest = true; r.setRenderTarget(out); }
+      else { r.setViewport(...v); r.setScissor(...c); }
+    };
+    if (out) { out.scissorTest = false; }
+    r.setRenderTarget(out);
+    r.setScissorTest(false);
+    r.clear();
+    if (!out) r.setScissorTest(true);
+    r.autoClear = false;
+    for (const t of shown) {
+      place(t.view, t.clip);
+      this.mat.uniforms.uTex.value = (t.pane === "C" ? this.rtCorr : this.rtOrig).texture;
+      this.mat.uniforms.uSim.value = t.sim;
       r.render(this.qScene, this.qCam);
-      if (fx?.overlay) {
-        r.autoClear = false;
-        r.render(fx.overlay, camera);
-        r.autoClear = true;
-      }
-    });
+      if (fx?.overlay) r.render(fx.overlay, camera);
+    }
+    r.autoClear = true;
     r.setScissorTest(false);
     if (this.post) {
+      this.post.setTiles(shown.length > 1 && shown[0].view.w < this.w * 0.5 ? 3 : 1);
       r.setRenderTarget(null);
-      r.setViewport(0, 0, this.pw * 3, this.ph);
+      r.setViewport(0, 0, this.w, this.h);
       this.post.render();
     }
     r.toneMapping = prevTM;

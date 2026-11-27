@@ -7,6 +7,7 @@ vi.mock("./panels", () => ({
     renderer = {};
     setObserver() {}
     setOverrides() {}
+    resize() {}
     render() {}
     dispose() {}
   },
@@ -18,12 +19,6 @@ vi.mock("./stats", () => ({
     snapshot() { return { fps: 0, frameMs: 0, gpuMs: null, heapMB: 0, calls: 0, triangles: 0, geometries: 0, textures: 0 }; }
   },
 }));
-vi.mock("./overlays", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./overlays")>()),
-  DEFAULT_FLAGS: { graph: true, heatmap: true, bboxes: true, labels: true },
-  drawAll: () => {},
-}));
-
 import { Root } from "./Root";
 import { OBS_KEY } from "./appState";
 import * as dashboardScene from "../../adapters/threejs/scenes/dashboard";
@@ -69,7 +64,8 @@ beforeEach(() => {
     if (path === "/profiles" && method === "POST") return json({ id: "abc123", progress: {} }, 201);
     if (path === "/profiles/abc123/next") return json({ done: true, progress: { n: 12, max_trials: 50, min_trials: 12, width: 0.3, target_width: 0.4, done: true } });
     if (path === "/profiles/abc123/finish") { profiles.push(profileRow("abc123")); return json({ summary: SUMMARY }); }
-    if (path === "/correct") return json({});
+    if (path === "/profiles/abc123") return json({ summary: SUMMARY });
+    if (path === "/correct") return json({ diagnostics: { solver_tier: "allocated", tier_counts: { exact: 2 }, stage_latency_ms: { solving: 12.5, total: 20 } } });
     return json({}, 404);
   }));
 });
@@ -142,8 +138,66 @@ describe("app flow", () => {
     expect(radios[2].getAttribute("aria-checked")).toBe("true");
     expect(dashboardScene.ENV).toBe("glare");
     await waitFor(() => expect(calls.some((c) => c.url === "/correct" &&
-      c.body.objects.some((o: any) => o.id === "master_warning"))).toBe(true));
+      c.body.objects.some((o: any) => o.id === "master_warning"))).toBe(true), { timeout: 4000 }); // solves pause while relighting
     dashboardScene.setEnv("normal");
+  });
+
+  it("sim HUD starts clean; shortcuts switch modes, drawers, graph and help", async () => {
+    localStorage.setItem(OBS_KEY, "t0");
+    render(<Root />);
+    await toSim();
+    await screen.findByRole("radiogroup", { name: "view mode" });
+    const mode =(name: string) => screen.getByRole("radio", { name }).getAttribute("aria-checked");
+    const expanded = (name: string) => screen.getByRole("button", { name }).getAttribute("aria-expanded");
+    expect(mode("Split")).toBe("true");
+    for (const t of ["A · Original", "B · How you see it", "C · Corrected, as you see it"]) expect(screen.getByText(t)).toBeTruthy();
+    expect([expanded("Diagnostics"), expanded("Inspector"), expanded("Overlays")]).toEqual(["false", "false", "false"]);
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(document.body.textContent).not.toMatch(/placeholder|Phase 5/i);
+
+    fireEvent.keyDown(window, { key: "g" });
+    fireEvent.click(screen.getByRole("button", { name: "Overlays (1)" }));
+    for (const [name, on] of [["Confusion graph", "true"], ["Bounding boxes", "false"], ["ΔE00 labels", "false"], ["Importance heatmap", "false"]]) {
+      expect(screen.getByRole("switch", { name }).getAttribute("aria-checked")).toBe(on);
+    }
+    expect(screen.getByLabelText("graph pairs").getAttribute("value")).toBe("8");
+
+    fireEvent.keyDown(window, { key: "2" });
+    expect(mode("Wipe")).toBe("true");
+    const divider = screen.getByRole("slider", { name: "comparison divider" });
+    fireEvent.keyDown(divider, { key: "ArrowRight" });
+    expect(divider.getAttribute("aria-valuenow")).toBe("52");
+    fireEvent.keyDown(window, { key: "3" });
+    const feel = screen.getByRole("button", { name: "Feel the difference" });
+    fireEvent.click(feel);
+    expect(feel.getAttribute("aria-pressed")).toBe("true");
+    await screen.findByText("through your colour-vision model", {}, { timeout: 4000 });
+
+    fireEvent.keyDown(window, { key: "i" });
+    expect(expanded("Inspector")).toBe("true");
+    fireEvent.keyDown(window, { key: "d" });
+    expect([expanded("Diagnostics"), expanded("Inspector")]).toEqual(["true", "false"]);
+    expect(await screen.findByText("12.5 ms")).toBeTruthy();
+    expect(screen.getByText(/there are no uncertainty ranges/)).toBeTruthy();
+    fireEvent.keyDown(window, { key: "?" });
+    const help = screen.getByRole("dialog", { name: "help" });
+    for (const cue of ["outline", "hatch", "icon", "label"]) expect(help.textContent).toContain(cue);
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "help" })).toBeNull();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(expanded("Diagnostics")).toBe("false");
+  });
+
+  it("diagnostics show the calibrated posterior with intervals for a profile", async () => {
+    profiles.push(profileRow("abc123"));
+    localStorage.setItem(OBS_KEY, "profile:abc123");
+    render(<Root />);
+    await screen.findByText("Choose a scene to explore");
+    await toSim();
+    fireEvent.click(await screen.findByRole("button", { name: "Diagnostics" }));
+    expect(await screen.findByRole("img", { name: "deutan severity 0.80 (0.70–0.90)" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "threshold scale k 1.00 (0.90–1.10)" })).toBeTruthy();
+    expect(screen.getByText(/type probability: deutan 80%/)).toBeTruthy();
   });
 
   it("saved profile that still exists skips to scenes", async () => {

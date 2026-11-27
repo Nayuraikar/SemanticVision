@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { getScene } from "../../../adapters/threejs/scenes/registry";
 import { go, type Route } from "../appState";
 import { usePrefs } from "./prefs";
+import { Switch } from "./Switch";
 
 export function breadcrumb(route: Route | null): string[] {
   if (!route) return ["Menu"];
@@ -17,10 +18,9 @@ export const menuPath = (route: Route | null) => (route?.name === "sim" ? "#/sce
 interface Props {
   route: Route | null;
   barSlot: (el: HTMLElement | null) => void;
-  overlaySlot: (el: HTMLElement | null) => void;
 }
 
-export function TopBar({ route, barSlot, overlaySlot }: Props) {
+export function TopBar({ route, barSlot }: Props) {
   const prefs = usePrefs();
   const [open, setOpen] = useState(false);
   useEffect(() => {
@@ -47,11 +47,9 @@ export function TopBar({ route, barSlot, overlaySlot }: Props) {
       <aside id="sv-drawer" className="sv-drawer sv-glass" data-open={open} aria-label="settings">
         <h2>Settings</h2>
         <h4>Appearance</h4>
-        <label><input type="checkbox" checked={prefs.theme === "light"} onChange={(e) => prefs.set({ theme: e.target.checked ? "light" : "dark" })} />Light theme</label>
-        <label><input type="checkbox" checked={prefs.reduceMotion} onChange={(e) => prefs.set({ reduceMotion: e.target.checked })} />Reduce motion</label>
-        <label><input type="checkbox" checked={prefs.performance} onChange={(e) => prefs.set({ performance: e.target.checked })} />Performance mode</label>
-        <h4>Overlays</h4>
-        <div className="sv-overlay-slot" ref={overlaySlot} />
+        <Switch label="Light theme" checked={prefs.theme === "light"} onChange={(v) => prefs.set({ theme: v ? "light" : "dark" })} />
+        <Switch label="Reduce motion" checked={prefs.reduceMotion} onChange={(v) => prefs.set({ reduceMotion: v })} />
+        <Switch label="Performance mode" checked={prefs.performance} onChange={(v) => prefs.set({ performance: v })} />
         <p><button className="sv-pill" onClick={() => setOpen(false)}>Close</button></p>
       </aside>
     </>

@@ -142,7 +142,7 @@ describe("GlassCard", () => {
 
 describe("ScenePicker fly-in", () => {
   const picker = (flyTo: (id: string) => Promise<void> | null) => (
-    <ShellContext.Provider value={{ barSlot: null, overlaySlot: null, flyTo, thumbs: { toy: "data:image/jpeg;base64,AA" } }}>
+    <ShellContext.Provider value={{ barSlot: null, flyTo,thumbs: { toy: "data:image/jpeg;base64,AA" } }}>
       <AppStateProvider><ScenePicker /></AppStateProvider>
     </ShellContext.Provider>
   );

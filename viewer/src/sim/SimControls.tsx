@@ -1,6 +1,7 @@
 // Bottom event timeline and the environment dial / effect toggles.
 import { SPEEDS, formatTime, fractionOfStep, type Marker } from "./timeline";
 import type { FxToggles } from "./fxPolicy";
+import { Switch } from "../ui/Switch";
 
 export interface PlayState { step: number; playing: boolean; speed: number; live: boolean }
 export interface TimelineProps {
@@ -22,7 +23,8 @@ export function Timeline(p: TimelineProps) {
             {SPEEDS.map((s) => <option key={s} value={s}>{s}x</option>)}
           </select>
         </label>
-        <label className="sv-pill"><input type="checkbox" checked={p.follow} onChange={(e) => p.onFollow(e.target.checked)} />follow events</label>
+        <Switch label="follow events" checked={p.follow} onChange={p.onFollow} />
+        {!p.markers && <small className="sv-note">indexing events…</small>}
         <output className="sv-time">{formatTime(step)} / {formatTime(p.total)}</output>
       </div>
       <div className="sv-track">
@@ -34,7 +36,6 @@ export function Timeline(p: TimelineProps) {
             onClick={() => p.onSeek(m.step)} />
         ))}
       </div>
-      {!p.markers && <small className="sv-time">indexing events…</small>}
     </section>
   );
 }
@@ -55,17 +56,14 @@ export function FxBar({ fx, onChange, cinematicOn, blocked, tooltip, performance
   fx: FxToggles; onChange(v: FxToggles): void; cinematicOn: boolean; blocked: boolean; tooltip: string; performance: boolean;
 }) {
   const box = (k: "dust" | "waypoints", label: string, disabled = false) => (
-    <label className="sv-pill"><input type="checkbox" checked={fx[k] && !disabled} disabled={disabled}
-      onChange={(e) => onChange({ ...fx, [k]: e.target.checked })} />{label}</label>
+    <Switch label={label} checked={fx[k] && !disabled} disabled={disabled} onChange={(v) => onChange({ ...fx, [k]: v })} />
   );
   return (
     <>
       {box("dust", "dust particles", performance)}
       {box("waypoints", "waypoints")}
-      <label className="sv-pill" title={tooltip}>
-        <input type="checkbox" aria-label="cinematic" checked={cinematicOn} disabled={blocked}
-          onChange={(e) => onChange({ ...fx, cinematic: e.target.checked })} />cinematic
-      </label>
+      <Switch label="cinematic" title={tooltip} checked={cinematicOn} disabled={blocked}
+        onChange={(v) => onChange({ ...fx, cinematic: v })} />
     </>
   );
 }
