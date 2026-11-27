@@ -162,6 +162,23 @@ a { color: var(--sv-link); }
 .sv-modeopts { display: flex; flex-wrap: wrap; align-self: center; align-items: center; justify-content: center; gap: var(--sv-s2); }
 .sv-modeopts .sv-btn { margin: 0; }
 
+/* play mode */
+.sv-playpill { margin-top: var(--sv-s2); width: max-content; }
+.sv-mission { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sv-s2); padding: var(--sv-s1) 0; font-size: var(--sv-fs-s); }
+.sv-mission .sv-btn { margin: 0; }
+.sv-missioncard { display: inline-flex; align-items: center; gap: var(--sv-s1); padding: 3px 8px; border: 1px solid var(--sv-border); border-radius: var(--sv-r2); }
+.sv-gaugetray { border-radius: var(--sv-r2); }
+.sv-gaugetray input { width: 80px; }
+.sv-context { position: absolute; z-index: 7; left: var(--sv-s3); top: 110px; display: flex; flex-direction: column; gap: var(--sv-s2); width: 220px; padding: var(--sv-s3); border-radius: var(--sv-r2); background: var(--sv-glass-strong); overflow-wrap: anywhere; }
+.sv-context .sv-btn { margin: 0; }
+.sv-sim[data-mode="play"] .sv-dock { right: 190px; }
+.sv-minimap { position: absolute; z-index: 6; right: var(--sv-s3); bottom: var(--sv-s2);padding: var(--sv-s2); border-radius: var(--sv-r2); background: var(--sv-glass-strong); }
+.sv-minimap svg { display: block; cursor: crosshair; }
+.sv-map-beacon { fill: transparent; stroke: var(--sv-accent); stroke-width: 2; cursor: pointer; }
+.sv-map-hazard { fill: var(--sv-danger); }
+.sv-map-player { fill: var(--sv-text); }
+.sv-pause { display: flex; flex-direction: column; gap: var(--sv-s2); }
+
 /* right-hand panels */
 .sv-side { position: absolute; z-index: 8; top: 52px; right: var(--sv-s3); bottom: var(--sv-s2); width: min(320px, calc(100% - 24px)); box-sizing: border-box; padding: var(--sv-s3) var(--sv-s4); overflow: auto; background: var(--sv-glass-strong); border-radius: var(--sv-r2); visibility: hidden; opacity: 0; transform: translateX(28px); transition: opacity var(--sv-t-med) var(--sv-ease), transform var(--sv-t-med) var(--sv-ease), visibility 0s var(--sv-t-med); }
 .sv-side[data-open="true"] { visibility: visible; opacity: 1; transform: none; transition-delay: 0s; }

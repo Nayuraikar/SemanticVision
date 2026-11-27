@@ -11,6 +11,8 @@ export const SHORTCUTS: [string, string][] = [
   ["1 / 2 / 3", "split, wipe, single view"], ["Space", "play or pause"], ["← / →", "step back or forward"],
   ["I", "inspector"], ["G", "confusion graph"], ["D", "diagnostics"], ["?", "this help"], ["Esc", "close panels"],
   ["0", "reset the camera"], ["Drag / scroll", "orbit and zoom"], ["Click", "inspect and fly to an object"],
+  ["WASD / arrows", "Play: move (Shift sprints; use the Diagnostics button instead of D)"],
+  ["Q / E", "Play: turn"], ["Click (Play)", "walk, fly to a beacon, or use an object"], ["Esc (Play)", "pause menu"],
 ];
 
 function Glyph({ type }: { type: string }) {

@@ -4,7 +4,7 @@ import * as THREE from "three";
 import type { Waypoint } from "./fxPolicy";
 import { disposeObject } from "./driver";
 
-export interface FxFrame { dust: boolean; weather: string | null; waypoints: Waypoint[]; animate: boolean; dt: number; t: number }
+export interface FxFrame { dust: boolean; weather: string | null; waypoints: Waypoint[]; animate: boolean; dt: number; t: number; max?: number }
 type Kind = "dust" | "rain" | "fog";
 const SPEC: Record<Kind, { n: number; fall: number; drift: number }> = {
   dust: { n: 140, fall: 0.03, drift: 0.04 }, rain: { n: 500, fall: 5, drift: 0.25 }, fog: { n: 40, fall: 0, drift: 0.12 },
@@ -96,7 +96,7 @@ export class FxLayer {
       }
       a.needsUpdate = true;
     }
-    const n = Math.min(MAX_MARKERS, f.waypoints.length);
+    const n = Math.min(f.max ?? MAX_MARKERS, f.waypoints.length);
     for (let i = 0; i < n; i++) {
       const g = this.marker(i), w = f.waypoints[i];
       g.visible = true;

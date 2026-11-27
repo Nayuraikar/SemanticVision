@@ -41,11 +41,27 @@ import * as trafficScene from "../../adapters/threejs/scenes/traffic";
 import { ENVS, type EnvName } from "../../adapters/threejs/environments";
 import * as dashboardScene from "../../adapters/threejs/scenes/dashboard";
 import { DASH_LIGHTINGS, type DashLighting } from "../../adapters/threejs/dashboardSim";
+import { initPhysics, physicsReady } from "../../adapters/threejs/physics";
+import { PlaySession, type PlaySceneId } from "../../adapters/threejs/play/session";
+import { actionsFor, type Action } from "../../adapters/threejs/play/actions";
+import type { Facts } from "../../adapters/threejs/play/worlds";
+import { Beeper, gaugeValueAt, keysFrom, moveKey } from "./play/input";
+import {
+  addTime, elapsedMs, score, sessionLog, startRun, viewCondition, viewFor,
+  type Answer, type Mission, type MissionRecord, type MissionRun,
+} from "./play/missions";
+import { ContextCard, Minimap, MissionHud, PauseMenu, PlayPill, SceneControls, downloadLog } from "./play/PlayHud";
 
 const SOLVE_EVERY = 15; // frames; server additionally caches by snapshot signature
 /** used until the view element has a measurable size */
 const FALLBACK_SIZE = { w: 1200, h: 700 };
 const MODE_MS = 480, FEEL_MS = 1400, DRAG_PX = 4;
+const PLAY_SEED = 1, BEACON_PX = 28, LOOK_RATE = 0.004;
+/** clicking these walks there instead of selecting */
+const WALKABLE = ["grass", "road", "sidewalk", "crosswalk", "road_marking", "sky", "panel"];
+const DRAG_OBJECTS = ["car", "bush", "cone", "lamp"];
+const GAUGE_PART = /^g_(eng|hyd|elec|fuel)_(needle|face|readout|arc_\w+)$/;
+interface PlayHudState { facts: Facts; step: number; seconds: number; player: { x: number; z: number; yaw: number } }
 
 interface Obs { id: string; split?: string; model: string; kind: string; severity: number }
 type Side = "inspector" | "diagnostics" | null;
@@ -78,15 +94,41 @@ export function App({ sceneId }: { sceneId: string }) {
   const [env, setEnvState] = useState<EnvName>(trafficScene.ENV);
   const [lighting, setLightingState] = useState<DashLighting>(dashboardScene.ENV);
   const prefs = usePrefs();
+  const [playMode, setPlayMode] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [restarts, setRestarts] = useState(0);
+  const [card, setCard] = useState<string | null>(null);
+  const [mission, setMission] = useState<Mission | null>(null);
+  const [result, setResult] = useState<MissionRecord | null>(null);
+  const [records, setRecords] = useState<MissionRecord[]>(() => [...sessionLog]);
+  const [muted, setMuted] = useState(true);
+  const [hud, setHud] = useState<PlayHudState | null>(null);
+  const sessionRef = useRef<PlaySession | null>(null);
+  const runRef = useRef<MissionRun | null>(null);
+  const beeper = useRef(new Beeper());
+  const held = useRef(new Set<string>());
+  const sentKeys = useRef("");
+  const act = (a: Action) => sessionRef.current?.push(a);
+  const sendKeys = () => {
+    const k = keysFrom(held.current), text = JSON.stringify(k);
+    if (text === sentKeys.current) return;
+    sentKeys.current = text;
+    act({ type: "keys", ...k });
+  };
+  const releaseKeys = () => { held.current.clear(); sendKeys(); };
+  const switchMode = (v: boolean) => {
+    if (!v || physicsReady()) setPlayMode(v);
+    else void initPhysics().then(() => setPlayMode(true));
+  };
   const [fx, setFx] = useState(DEFAULT_FX);
   const diagOpen = side === "diagnostics";
   const blockers = cinematicBlockers(flags, { tier: diagOpen, latency: diagOpen, stats: diagOpen, posterior: diagOpen });
   const eff = effectiveFx(fx, blockers, prefs.performance, prefs.still);
   const live = useRef({
     obs: null as Obs | null, flags, topN, force: false, fx, eff, still: prefs.still, performance: prefs.performance,
-    view, hover, selected, feelGoal: null as number | null,
+    view, hover, selected, feelGoal: null as number | null, paused,
   });
-  Object.assign(live.current, { flags, topN, fx, eff, still: prefs.still, performance: prefs.performance, view, hover, selected });
+  Object.assign(live.current, { flags, topN, fx, eff, still: prefs.still, performance: prefs.performance, view, hover, selected, paused });
   const [play, setPlay] = useState<PlayState>({ step: 0, playing: true, speed: 1, live: true });
   const [marks, setMarks] = useState<{ key: string; list: Marker[] } | null>(null);
   const markKey = markerKey(sceneId);
@@ -118,7 +160,13 @@ export function App({ sceneId }: { sceneId: string }) {
   const goLive = () => command({ live: true, playing: true, speed: 1 });
 
   /** scene-side actions, installed by the frame-loop effect */
-  const rigRef = useRef<{ focus(id: string): void; reset(): void; pick(x: number, y: number): string | null; orbit: OrbitRig } | null>(null);
+  const rigRef = useRef<{
+    focus(id: string): void; reset(): void; pick(x: number, y: number): string | null; orbit: OrbitRig;
+    /** play mode: pointer -> ground point, object lookup and screen positions */
+    onPlane(x: number, y: number, normal: "y" | "z", at: number): THREE.Vector3 | null;
+    mesh(id: string): THREE.Mesh | undefined;
+    screenOf(p: THREE.Vector3, x: number, y: number): [number, number] | null;
+  } | null>(null);
   const panelsRef = useRef<ThreePanels | null>(null);
 
   const changeView = (patch: Partial<ViewState>) => setView((v) => ({ ...v, ...patch }));
@@ -140,11 +188,43 @@ export function App({ sceneId }: { sceneId: string }) {
     rigRef.current?.focus(id);
   };
 
+  // ---- missions ----
+  const startMission = (m: Mission, c: "B" | "C") => {
+    live.current.feelGoal = null; setFeeling(true); changeView(viewFor(c));
+    act({ type: "mission", name: m.id });
+    runRef.current = startRun(m);
+    setMission(m); setResult(null); setCard(null); setSelected(null); setSide(null);
+  };
+  const endMission = () => {
+    runRef.current = null; setMission(null); setCard(null);
+    act({ type: "mission", name: "end" });
+  };
+  const answer = (a: Answer) => {
+    const run = runRef.current, s = sessionRef.current;
+    if (!run || !s) return;
+    const rec = score(run, a, s.facts(), obsId);
+    sessionLog.push(rec);
+    setRecords([...sessionLog]); setResult(rec);
+    endMission();
+  };
+
   const keys = useRef((_: KeyboardEvent) => {});
   keys.current = (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = e.target as HTMLInputElement | null;
     const target = el && { tagName: el.tagName, type: el.type, role: el.getAttribute?.("role") };
+    if (playMode) {
+      // Escape = pause menu; WASD / arrows / Q / E / Shift move; timeline keys do nothing
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (help) setHelp(false);
+        else { releaseKeys(); setPaused((p) => !p); }
+        return;
+      }
+      if (paused) return;
+      const k = moveKey(e.key, target);
+      if (k) { e.preventDefault(); held.current.add(k); sendKeys(); return; }
+    }
     const v = viewKey(e.key, target);
     if (v) {
       e.preventDefault();
@@ -159,7 +239,7 @@ export function App({ sceneId }: { sceneId: string }) {
       else { setSelected(null); rigRef.current?.reset(); }
       return;
     }
-    if (help) return;
+    if (help || playMode) return;
     const a = keyAction(e.key, target);
     if (!a) return;
     e.preventDefault();
@@ -168,9 +248,20 @@ export function App({ sceneId }: { sceneId: string }) {
   };
   useEffect(() => {
     const f = (e: KeyboardEvent) => keys.current(e);
-    addEventListener("keydown", f);
-    return () => removeEventListener("keydown", f);
+    const up = (e: KeyboardEvent) => { if (held.current.delete(e.key.toLowerCase())) sendKeys(); };
+    const blur = () => releaseKeys();
+    addEventListener("keydown", f); addEventListener("keyup", up); addEventListener("blur", blur);
+    return () => {
+      removeEventListener("keydown", f); removeEventListener("keyup", up); removeEventListener("blur", blur);
+      beeper.current.dispose();
+    };
   }, []);
+
+  // a new session (mode, scene or restart) starts with a clean HUD
+  useEffect(() => {
+    setPaused(false); setCard(null); setMission(null); setResult(null); setHud(null);
+    runRef.current = null; held.current.clear(); sentKeys.current = "";
+  }, [sceneId, playMode, restarts]);
 
   useEffect(() => {
     if (!getScene(sceneId)) return;
@@ -211,21 +302,33 @@ export function App({ sceneId }: { sceneId: string }) {
     panelsRef.current = panels;
     panels.setObserver(live.current.obs);
     const stat = new Stats(panels.renderer);
-    const driver = new SimDriver(sceneId, 16 / 9);
+    // Watch: the scripted driver. Play: a separate session driven by the input queue.
+    const session = playMode ? new PlaySession({
+      sceneId: sceneId as PlaySceneId, seed: PLAY_SEED, aspect: 16 / 9,
+      env: sceneId === trafficScene.id ? trafficScene.ENV : sceneId === dashboardScene.id ? dashboardScene.ENV : undefined,
+    }) : null;
+    sessionRef.current = session;
+    const driver = session ? null : new SimDriver(sceneId, 16 / 9);
+    const src = (session ?? driver)!;
+    const beacons: Waypoint[] = session?.ground.beacons.map((b) => ({
+      key: b.id, score: 1, position: [b.x, sceneId === dashboardScene.id ? -0.35 : 0.15, b.z],
+    })) ?? [];
+    let alarms = 0;
     const layer = new FxLayer();
     const orbit = new OrbitRig();
     /** the one camera every view shares: the sim's authored camera plus orbit, with a per-tile aspect */
     const cam = new THREE.PerspectiveCamera();
     const C = ctl.current;
-    Object.assign(C, { playing: true, speed: 1, live: true, seek: null, relight: null, jumped: null, step: 0, total: driver.total });
+    Object.assign(C, { playing: true, speed: 1, live: true, seek: null, relight: null, jumped: null, step: 0, total: driver?.total ?? 1 });
     live.current.force = true;
+    setOv(null);
     const prev = new Map<string, [number, number]>();
     let frame = 0, prevT: number | undefined, raf = 0, busy = false, lastSnap: Snapshot | null = null, lastOv: Overrides | null = null;
     let lastHud = 0, lastMs: number | undefined, acc = 0, epoch = 0;
     let relight: { apply(k: number): void; start: number } | null = null;
     let waypoints: Waypoint[] = [];
     let follow: { point: THREE.Vector3; age: number } | null = null;
-    let base = { pos: driver.camera.position.clone(), quat: driver.camera.quaternion.clone() };
+    let base = { pos: src.camera.position.clone(), quat: src.camera.quaternion.clone() };
     let visible = true;
     const unwatch = watchVisibility(viewRef.current!, (v) => { visible = v; });
     const size = { ...FALLBACK_SIZE, ratio: 0 };
@@ -252,42 +355,61 @@ export function App({ sceneId }: { sceneId: string }) {
       return shown;
     };
     const aimCamera = (tiles: Tile[], dt: number) => {
-      const authored = driver.camera, v = (tiles.find(isVisible) ?? tiles[0]).view;
+      const authored = src.camera, v = (tiles.find(isVisible) ?? tiles[0]).view;
+      cam.aspect = v.w / Math.max(1, v.h);
+      if (session) {
+        cam.fov = fitFov(session.pose(cam), cam.aspect);
+        cam.updateProjectionMatrix();
+        return;
+      }
       orbit.update(dt, live.current.still);
       cam.near = authored.near; cam.far = authored.far;
-      cam.aspect = v.w / Math.max(1, v.h);
       cam.fov = fitFov(authored.fov, cam.aspect);
       cam.updateProjectionMatrix();
       orbit.apply(authored, cam);
     };
-    const meshOf = (id: string) => svMeshes(driver.scene).find((m) => m.userData.sv.id === id);
+    const meshOf = (id: string) => svMeshes(src.scene).find((m) => m.userData.sv.id === id);
     rigRef.current = {
       orbit,
+      mesh: meshOf,
+      onPlane: (x, y, normal, at) => {
+        const tile = tileAt(shown, x, y);
+        if (!tile) return null;
+        const ray = new THREE.Raycaster();
+        ray.setFromCamera(new THREE.Vector2(...ndcIn(tile.view, x, y)), cam);
+        const n = new THREE.Vector3(0, normal === "y" ? 1 : 0, normal === "z" ? 1 : 0);
+        return ray.ray.intersectPlane(new THREE.Plane(n, -at), new THREE.Vector3());
+      },
+      screenOf: (p, x, y) => {
+        const tile = tileAt(shown, x, y);
+        return tile ? projectPoint(p, cam, tile.view) : null;
+      },
       focus: (id) => {
-        const m = meshOf(id);
+        const m = session ? undefined : meshOf(id);
         if (m) orbit.focusOn(new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3()));
       },
       reset: () => orbit.reset(),
       pick: (x, y) => {
         const tile = tileAt(shown, x, y);
-        return tile ? pickObject(driver.scene, cam, ndcIn(tile.view, x, y)) : null;
+        return tile ? pickObject(src.scene, cam, ndcIn(tile.view, x, y)) : null;
       },
     };
     /** drop colour overrides: they belong to another time or environment */
     const invalidate = () => {
       epoch++; lastOv = null; lastSnap = null; waypoints = []; prev.clear(); prevT = undefined;
-      panels.setOverrides(driver.scene, {} as Overrides, applyOverrides);
+      panels.setOverrides(src.scene, {} as Overrides, applyOverrides);
       setOv(null); setSnapState(null);
       live.current.force = true;
     };
-    const rebased = () => { base = { pos: driver.camera.position.clone(), quat: driver.camera.quaternion.clone() }; };
+    const rebased = () => { base = { pos: src.camera.position.clone(), quat: src.camera.quaternion.clone() }; };
     const followTo = (m: Marker) => {
-      const mesh = svMeshes(driver.scene).find((x) => m.ids.includes(x.userData.sv.id as string));
+      const mesh = svMeshes(src.scene).find((x) => m.ids.includes(x.userData.sv.id as string));
       const point = m.point ? new THREE.Vector3(...m.point) : mesh?.getWorldPosition(new THREE.Vector3());
       if (point) follow = { point, age: 0 };
     };
     const moveCamera = (dt: number) => {
-      const authored = driver.camera, L = live.current;
+      if (session) return;
+      const authored = src.camera, L = live.current;
       let w = 0;
       if (follow && L.fx.follow) {
         follow.age += dt;
@@ -300,7 +422,23 @@ export function App({ sceneId }: { sceneId: string }) {
       const aim = new THREE.Matrix4().lookAt(authored.position, follow.point, authored.up);
       authored.quaternion.slerp(new THREE.Quaternion().setFromRotationMatrix(aim), 0.8 * w);
     };
+    const playAdvance = (s: PlaySession, dt: number) => {
+      if (live.current.paused) return;
+      const c = advanceClock(acc, dt, 1);
+      acc = c.acc;
+      for (let i = 0; i < c.steps; i++) {
+        if (s.willInvalidate()) invalidate(); // restore authored colours before they change
+        s.tick();
+      }
+      const run = runRef.current;
+      if (run) addTime(run, viewCondition(live.current.view), dt * 1000);
+      const now = s.facts().alarms;
+      if (now > alarms && !live.current.performance) beeper.current.beep();
+      alarms = now;
+    };
     const advance = (dt: number) => {
+      if (session) return playAdvance(session, dt);
+      if (!driver) return;
       if (C.seek !== null && driver.ready) {
         const goal = C.seek;
         C.seek = null; acc = 0;
@@ -351,9 +489,9 @@ export function App({ sceneId }: { sceneId: string }) {
       lastMs = ms;
       fit();
       advance(dt);
-      C.step = C.seek ?? driver.step;
+      C.step = C.seek ?? src.step;
       const L = live.current;
-      if (C.relight !== null && driver.ready) {
+      if (C.relight !== null && driver?.ready) {
         relight?.apply(1);
         invalidate(); // before the switch, so authored colours are restored first
         relight = { apply: startRelight(driver.scene, C.relight), start: ms };
@@ -366,13 +504,14 @@ export function App({ sceneId }: { sceneId: string }) {
       }
       feelStep(dt);
       moveCamera(dt);
-      const { scene } = driver;
+      const { scene } = src;
       const tiles = tilesAt(ms);
       aimCamera(tiles, dt);
       if (L.eff.animate || L.eff.waypoints) {
         layer.update(cam, {
           dust: L.eff.dust, weather: L.eff.weather ? (scene.userData.svEnv?.name ?? null) : null,
-          waypoints: L.eff.waypoints ? waypoints : [], animate: L.eff.animate, dt: L.eff.animate ? dt : 0, t,
+          waypoints: !L.eff.waypoints ? [] : session ? (L.performance ? [] : beacons) : waypoints,
+          animate: L.eff.animate, dt: L.eff.animate ? dt : 0, t, max: session ? beacons.length : undefined,
         });
       }
       const settled = (target.find(isVisible) ?? target[0]).view.w;
@@ -390,7 +529,7 @@ export function App({ sceneId }: { sceneId: string }) {
         postCorrect(API, snap)
           .then((o) => {
             if (at !== epoch) return; // solved for a state we have since left
-            lastOv = o; panels.setOverrides(driver.scene, o, applyOverrides);
+            lastOv = o; panels.setOverrides(src.scene, o, applyOverrides);
             setOv(o); setSnapState(snap); setSolve((p) => solveInfo(o, p)); setStatus("ok");
           })
           .catch((e) => setStatus(String(e)))
@@ -408,32 +547,89 @@ export function App({ sceneId }: { sceneId: string }) {
       placeCard(tiles);
       stat.end(ms);
       if (ms - lastHud > 250) { lastHud = ms; setStats(stat.snapshot()); }
-      if (frame % 6 === 0) sync();
+      if (frame % 6 === 0) {
+        sync();
+        if (session) setHud({
+          facts: session.facts(), step: session.step, seconds: runRef.current ? elapsedMs(runRef.current) / 1000 : 0,
+          player: { x: session.player.x, z: session.player.z, yaw: session.player.yaw },
+        });
+      }
       frame++;
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     const canvas = glRef.current!, surface = ovRef.current!;
-    const wheel = (e: WheelEvent) => { e.preventDefault(); orbit.zoomBy(Math.exp(e.deltaY * 0.0012)); };
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = Math.exp(e.deltaY * 0.0012);
+      if (!session) orbit.zoomBy(factor);
+      else if (!live.current.paused) session.push({ type: "zoom", factor });
+    };
     surface.addEventListener("wheel", wheel, { passive: false });
     return () => {
       cancelAnimationFrame(raf); unwatch(); surface.removeEventListener("wheel", wheel); rigRef.current = null;
-      epoch++; layer.dispose(); driver.dispose(); panels.dispose(); panelsRef.current = null;
+      epoch++; layer.dispose(); src.dispose(); sessionRef.current = null; panels.dispose(); panelsRef.current = null;
       // release the context only once the canvas has left the page (it is reused on scene switches)
       queueMicrotask(() => { if (!canvas.isConnected) panels.renderer.forceContextLoss?.(); });
     };
-  }, [sceneId]);
+  }, [sceneId, playMode, restarts]);
 
   // ---- pointer: drag orbits, hover glows, click inspects and flies to the object ----
-  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const drag = useRef<{ x: number; y: number; moved: boolean; kind: "look" | "gauge" | "object"; id: string | null } | null>(null);
+  /** what a drag starting on `id` manipulates in play mode */
+  const dragKind = (id: string | null) => {
+    if (!playMode || !id || (mission && !mission.done)) return "look" as const;
+    if (sceneId === dashboardScene.id && GAUGE_PART.test(id)) return "gauge" as const;
+    return sceneId === "toy" && DRAG_OBJECTS.includes(id) ? "object" as const : "look" as const;
+  };
+  const playDrag = (d: NonNullable<typeof drag.current>, dx: number, dy: number, x: number, y: number) => {
+    const rig = rigRef.current!;
+    if (d.kind === "gauge") {
+      const system = GAUGE_PART.exec(d.id!)![1] as "eng" | "hyd" | "elec" | "fuel";
+      const face = rig.mesh(`g_${system}_face`), c = face && rig.screenOf(face.position, x, y);
+      if (c) act({ type: "gauge", system, value: gaugeValueAt(x - c[0], y - c[1]) });
+    } else if (d.kind === "object") {
+      const m = rig.mesh(d.id!), p = m && rig.onPlane(x, y, "y", m.position.y);
+      if (p) act({ type: "drag", id: d.id!, x: p.x, z: p.z });
+    } else act({ type: "look", yaw: dx * LOOK_RATE, pitch: dy * LOOK_RATE });
+  };
+  const playClick = (x: number, y: number) => {
+    const rig = rigRef.current, s = sessionRef.current;
+    if (!rig || !s) return;
+    const beacon = prefs.performance || !fx.waypoints ? undefined : s.ground.beacons.find((b) => {
+      const at = rig.screenOf(new THREE.Vector3(b.x, sceneId === dashboardScene.id ? -0.35 : 0.15, b.z), x, y);
+      return !!at && Math.hypot(at[0] - x, at[1] - y) < BEACON_PX;
+    });
+    if (beacon) { act({ type: "fly", id: beacon.id }); return; }
+    const id = rig.pick(x, y);
+    const cls = id ? (rig.mesh(id)?.userData.sv.cls as string | undefined) : undefined;
+    if (!id || WALKABLE.includes(cls ?? "")) {
+      setCard(null); setSelected(null);
+      // the instrument panel has no floor: step sideways towards the clicked spot
+      if (sceneId === dashboardScene.id) {
+        const p = rig.onPlane(x, y, "z", 0);
+        if (p) act({ type: "walk", x: p.x, z: s.player.z });
+      } else {
+        const p = rig.onPlane(x, y, "y", 0);
+        if (p) act({ type: "walk", x: p.x, z: p.z });
+      }
+      return;
+    }
+    setCard(id);
+    if (mission) { setSelected(id); return; } // during a mission a click only picks an answer
+    select(id);
+    const primary = actionsFor(sceneId, id)[0];
+    if (primary) act(primary.action);
+  };
   const local = (e: ReactPointerEvent<Element>) => {
     const r = e.currentTarget.getBoundingClientRect();
     return [e.clientX - r.left, e.clientY - r.top] as const;
   };
   const lastPick = useRef(0);
   const pointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
-    if (e.button !== 0) return;
-    drag.current = { x: e.clientX, y: e.clientY, moved: false };
+    if (e.button !== 0 || paused) return;
+    const id = playMode ? rigRef.current?.pick(...local(e)) ?? null : null;
+    drag.current = { x: e.clientX, y: e.clientY, moved: false, kind: dragKind(id), id };
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
   const pointerMove = (e: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -442,7 +638,8 @@ export function App({ sceneId }: { sceneId: string }) {
       const dx = e.clientX - d.x, dy = e.clientY - d.y;
       if (!d.moved && Math.hypot(dx, dy) < DRAG_PX) return;
       d.moved = true; d.x = e.clientX; d.y = e.clientY;
-      rigRef.current?.orbit.rotate(-dx * 0.005, dy * 0.004);
+      if (playMode) { if (rigRef.current && !paused) playDrag(d, dx, dy, ...local(e)); }
+      else rigRef.current?.orbit.rotate(-dx * 0.005, dy * 0.004);
       setHover(null);
       return;
     }
@@ -456,6 +653,7 @@ export function App({ sceneId }: { sceneId: string }) {
     drag.current = null;
     if (!d || d.moved) return;
     const [x, y] = local(e);
+    if (playMode) { playClick(x, y); return; }
     const id = rigRef.current?.pick(x, y) ?? null;
     select(id);
     if (!id) rigRef.current?.reset();
@@ -465,7 +663,8 @@ export function App({ sceneId }: { sceneId: string }) {
   const ids = objects.map((o) => o.id).sort((a, b) => a.localeCompare(b));
   const observer: Obs | null = presets.find((p) => p.id === obsId)
     ?? (profiles.find((p) => p.observer_id === obsId) ? { ...profiles.find((p) => p.observer_id === obsId)!, id: obsId } : null);
-  const inspection = side === "inspector" && selected ? inspect(selected, snapState, ov, solve?.tier ?? null) : null;
+  // during a mission object details would give the answer away
+  const inspection = side === "inspector" && selected && !mission ? inspect(selected, snapState, ov, solve?.tier ?? null) : null;
   const mySummary = summary?.id === obsId ? summary : null;
   const hovered = hover ? objects.find((o) => o.id === hover) : undefined;
   const hoveredDe = hover ? perObjectDe(ov?.confusion_pairs ?? []).get(hover) : undefined;
@@ -496,24 +695,30 @@ export function App({ sceneId }: { sceneId: string }) {
   );
   const dial = sceneId === trafficScene.id ? (
     <EnvDial label="environment" options={ENVS} value={env}
-      onChange={(v) => { trafficScene.setEnv(v as EnvName); setEnvState(v as EnvName); ctl.current.relight = v; }} />
-  ) : sceneId === dashboardScene.id ? (
+      onChange={(v) => {
+        trafficScene.setEnv(v as EnvName); setEnvState(v as EnvName);
+        if (playMode) act({ type: "env", env: v as EnvName });
+        else ctl.current.relight = v;
+      }} />
+  ) : sceneId === dashboardScene.id && !playMode ? (
     <EnvDial label="lighting" options={DASH_LIGHTINGS} value={lighting}
       onChange={(v) => { dashboardScene.setEnv(v as DashLighting); setLightingState(v as DashLighting); ctl.current.relight = v; }} />
   ) : null;
   return (
-    <div className="sv-sim" data-side={side ?? "none"}>
+    <div className="sv-sim" data-side={side ?? "none"} data-mode={playMode ? "play" : "watch"}>
       {barSlot && createPortal(barControls, barSlot)}
       <div className="sv-view" ref={viewRef}>
         <canvas ref={glRef} aria-hidden="true" />
         <canvas ref={ovRef} className="sv-view-input" data-hover={!!hover} role="img"
-          aria-label="3D scene. Drag to orbit, scroll to zoom, click an object to inspect it. Use the inspector to pick objects by keyboard."
+          aria-label={playMode
+            ? "3D scene, play mode. WASD or arrows move, Q and E turn, drag to look, scroll to zoom, click to walk or act, Escape pauses."
+            : "3D scene. Drag to orbit, scroll to zoom, click an object to inspect it. Use the inspector to pick objects by keyboard."}
           onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp}
           onPointerCancel={() => { drag.current = null; }} onPointerLeave={() => setHover(null)}
           onDoubleClick={() => rigRef.current?.reset()} />
         <PaneLabels view={view} />
         {view.mode === "wipe" && <WipeDivider value={view.divider} onChange={(divider) => changeView({ divider })} />}
-        {hover && hover !== selected && (
+        {hover && hover !== selected && !mission && (
           <div ref={cardRef} className="sv-glass sv-hovercard" role="status">
             <b>{hover}</b>
             {hovered && <small>{`${hovered.class} · ${hovered.state ?? "default"}`}</small>}
@@ -524,7 +729,20 @@ export function App({ sceneId }: { sceneId: string }) {
 
       <div className="sv-topleft">
         <OverlayDrawer open={trayOpen} onOpen={setTrayOpen} flags={flags} onChange={setFlags} topN={topN} onTopN={setTopN} />
+        <PlayPill play={playMode} onChange={switchMode} />
       </div>
+      {playMode && card && !mission?.choices && (
+        <ContextCard id={card} actions={actionsFor(sceneId, card)} answering={!!mission && !mission.done && !mission.choices}
+          onAction={act} onAnswer={answer} onClose={() => setCard(null)} />
+      )}
+      {playMode && hud && !prefs.performance && sessionRef.current && (
+        <Minimap ground={sessionRef.current.ground} player={hud.player} hazards={mission ? [] : hud.facts.hazards}
+          onFly={(id) => act({ type: "fly", id })} onWalk={(x, z) => act({ type: "walk", x, z })} />
+      )}
+      {playMode && paused && (
+        <PauseMenu onResume={() => setPaused(false)} onRestart={() => { setPaused(false); setRestarts((n) => n + 1); }}
+          onMenu={() => go("#/scenes")} />
+      )}
       <ModeBar mode={view.mode} onMode={setMode} />
       <div className="sv-topright">
         <button className="sv-pill sv-solidpill" aria-expanded={side === "inspector"} aria-controls="sv-inspector" aria-keyshortcuts="I"
@@ -540,15 +758,30 @@ export function App({ sceneId }: { sceneId: string }) {
           if (p.source) { live.current.feelGoal = null; setFeeling(false); changeView({ ...p, feel: 0 }); } else changeView(p);
         }} onFeel={toggleFeel} feeling={feeling} />
         <div className="sv-trays">
+          {/* hidden during missions: gauge sliders would show the answer and actions could change it */}
+          {playMode && (!mission || mission.done) && (
+            <SceneControls scene={sceneId} facts={hud?.facts ?? null} lighting={lighting} onAction={act}
+              onLighting={(v) => { dashboardScene.setEnv(v); setLightingState(v); act({ type: "lighting", env: v }); }} />
+          )}
           {dial ?? <span />}
           <div className="sv-glass sv-fxtray" role="group" aria-label="effects">
             <FxBar fx={fx} onChange={setFx} cinematicOn={eff.cinematic} blocked={prefs.performance || blockers.length > 0}
               tooltip={cinematicTooltip(blockers, prefs.performance)} performance={prefs.performance || prefs.still} />
           </div>
         </div>
-        <Timeline state={play} total={ctl.current.total} markers={markers} follow={fx.follow}
-          onSeek={seekTo} onToggle={togglePlay} onSpeed={(speed) => command({ speed, live: false })} onNext={jumpNext}
-          onLive={goLive} onFollow={(v) => setFx({ ...fx, follow: v })} />
+        {playMode ? (
+          <MissionHud scene={sceneId} step={hud?.step ?? 0} beacons={sessionRef.current?.ground.beacons ?? []}
+            active={mission} seconds={hud?.seconds ?? 0} result={result} records={records}
+            muted={muted} audioOff={prefs.performance}
+            onStart={startMission} onAnswer={answer} onCancel={endMission} onCloseResult={() => setResult(null)}
+            onFly={(id) => act({ type: "fly", id })}
+            onMute={(m) => { beeper.current.setMuted(m); setMuted(m); }}
+            onDownload={() => downloadLog(records)} onPause={() => { releaseKeys(); setPaused(true); }} />
+        ) : (
+          <Timeline state={play} total={ctl.current.total} markers={markers} follow={fx.follow}
+            onSeek={seekTo} onToggle={togglePlay} onSpeed={(speed) => command({ speed, live: false })} onNext={jumpNext}
+            onLive={goLive} onFollow={(v) => setFx({ ...fx, follow: v })} />
+        )}
       </div>
 
       <Drawer id="sv-inspector" title="Inspector" open={side === "inspector"} onClose={() => setSide(null)}>

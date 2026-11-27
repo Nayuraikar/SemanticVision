@@ -188,6 +188,47 @@ describe("app flow", () => {
     expect(expanded("Diagnostics")).toBe("false");
   });
 
+  it("Watch | Play: mission HUD, pause menu, a scored mission, then back to Watch", async () => {
+    localStorage.setItem(OBS_KEY, "t0");
+    render(<Root />);
+    await toSim();
+    const radio = (name: string) => screen.getByRole("radio", { name });
+    await screen.findByRole("radiogroup", { name: "mode" });
+    expect(radio("Watch").getAttribute("aria-checked")).toBe("true");
+    expect(screen.queryByLabelText("mission HUD")).toBeNull();
+
+    fireEvent.click(radio("Play"));
+    await screen.findByLabelText("mission HUD", {}, { timeout: 4000 });
+    expect(screen.queryByLabelText("event timeline")).toBeNull();
+    const scrubber = screen.getByRole("slider", { name: "scrub" }) as HTMLInputElement;
+    expect(scrubber.disabled).toBe(true);
+    expect(scrubber.parentElement!.getAttribute("title")).toMatch(/Scrubbing is off/);
+    expect(screen.getByRole("switch", { name: "alarm beep" }).getAttribute("aria-checked")).toBe("false");
+    await screen.findByRole("img", { name: /minimap/ });
+
+    fireEvent.keyDown(window, { key: "d" }); // movement, not the diagnostics shortcut
+    fireEvent.keyUp(window, { key: "d" });
+    expect(screen.getByRole("button", { name: "Diagnostics" }).getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    const menu = screen.getByRole("dialog", { name: "pause menu" });
+    for (const t of ["Resume", "Restart scene", "Back to menu"]) expect(menu.textContent).toContain(t);
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    expect(screen.queryByRole("dialog", { name: "pause menu" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Separate cone from vegetation: start in view B" }));
+    await new Promise((r) => setTimeout(r, 100));
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(await screen.findByText("✗ Not correct")).toBeTruthy(); // nothing was dragged
+    expect(screen.getByText(/view B$/)).toBeTruthy();
+    expect(screen.getByText(/demo task log, not a validated study · B: 0\/1 correct/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Download log" }) as HTMLButtonElement).disabled).toBe(false);
+
+    fireEvent.click(radio("Watch"));
+    await screen.findByLabelText("event timeline");
+    expect(screen.queryByLabelText("mission HUD")).toBeNull();
+  });
+
   it("diagnostics show the calibrated posterior with intervals for a profile", async () => {
     profiles.push(profileRow("abc123"));
     localStorage.setItem(OBS_KEY, "profile:abc123");

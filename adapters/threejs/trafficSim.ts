@@ -79,11 +79,11 @@ function setEmissive(m: SVMesh, e: V3) {
   if (!m.userData.svOrig || !m.userData.svHasOv) { m.material.emissive.setRGB(...e); m.material.emissiveIntensity = 1; }
 }
 
-interface Vehicle {
+export interface Vehicle {
   id: string; ap: Approach; mesh: SVMesh; brake: SVMesh; ind: SVMesh; indR: SVMesh; half: V3;
   v: number; cruise: number; runner: boolean; ignoreObs: boolean; halt: boolean; damaged: boolean; hazard: boolean;
 }
-interface Ped {
+export interface Ped {
   id: string; mesh: SVMesh; head: SVMesh; cw: number; side: number; speed: number; crossing: boolean; halt: boolean;
   cycleDone: number;
 }
@@ -107,8 +107,8 @@ export class TrafficSim {
   collisionPoint: V3 | null = null;
   private rng!: Rng;
   private offset = 0;
-  private vehicles: Vehicle[] = [];
-  private peds: Ped[] = [];
+  protected vehicles: Vehicle[] = [];
+  protected peds: Ped[] = [];
   private spawns: Spawn[] = [];
   private lamps = new Map<string, { mesh: SVMesh; axis: Axis; colour: Light }>();
   private collided = new Set<string>();
@@ -302,7 +302,7 @@ export class TrafficSim {
 
   private emit(e: Event) { (this.scene.userData.svEvents as Event[]).push(e); }
 
-  private setState(m: SVMesh, s: string) {
+  protected setState(m: SVMesh, s: string) {
     const sv = m.userData.sv as SVTag;
     if (sv.state === s) return;
     this.emit({ type: "state_change", object_id: sv.id, data: { from: sv.state ?? "default", to: s, step: this.step } });
@@ -343,8 +343,11 @@ export class TrafficSim {
     return [t.x, t.y, t.z];
   }
 
-  private updateSignals() {
-    const sig = signalAt(this.time + this.offset);
+  /** Signal source; play mode overrides it. */
+  protected signals() { return signalAt(this.time + this.offset); }
+
+  protected updateSignals() {
+    const sig = this.signals();
     for (const ax of ["ew", "ns"] as Axis[]) {
       if (this.lastLight[ax] === sig[ax]) continue;
       this.lastLight[ax] = sig[ax];
@@ -358,7 +361,7 @@ export class TrafficSim {
     return sig;
   }
 
-  private control(v: Vehicle, sig: ReturnType<typeof signalAt>, pos: V3) {
+  protected control(v: Vehicle, sig: ReturnType<typeof signalAt>, pos: V3) {
     if (v.damaged) return;
     const u = dot(pos, v.ap.dir);
     let target = v.halt ? 0 : v.cruise;
@@ -394,7 +397,7 @@ export class TrafficSim {
     this.physics!.bodies.get(v.id)!.setLinvel({ x: v.ap.dir[0] * v.v, y: 0, z: v.ap.dir[2] * v.v }, true);
   }
 
-  private pedControl(p: Ped, sig: ReturnType<typeof signalAt>, pos: V3) {
+  protected pedControl(p: Ped, sig: ReturnType<typeof signalAt>, pos: V3) {
     const cw = CROSSWALKS[p.cw];
     // crossing the NS road is allowed while EW is green (NS red), and vice versa
     const allowed = (cw.across === "ns" ? sig.ew : sig.ns) === "green";

@@ -52,8 +52,8 @@ export const DEPENDS: Record<System, [System, System]> = {
 /** annunciator rows, top to bottom: fixed legend colour per tile, as on a real panel */
 export const ROWS: Level[] = ["warning", "caution", "caution", "normal", "normal"];
 
-const LAMP_EMIT: Record<Level, V3> = { warning: [1.0, 0.03, 0.02], caution: [1.0, 0.45, 0.0], normal: [0.03, 0.85, 0.2] };
-const LAMP_LENS: Record<Level, V3> = { warning: [0.09, 0.025, 0.022], caution: [0.1, 0.065, 0.022], normal: [0.022, 0.075, 0.035] };
+export const LAMP_EMIT: Record<Level, V3> = { warning: [1.0, 0.03, 0.02], caution: [1.0, 0.45, 0.0], normal: [0.03, 0.85, 0.2] };
+export const LAMP_LENS: Record<Level, V3> = { warning: [0.09, 0.025, 0.022], caution: [0.1, 0.065, 0.022], normal: [0.022, 0.075, 0.035] };
 const LIT_NAME: Record<Level, string> = { warning: "red", caution: "amber", normal: "green" };
 const BLUE: V3 = [0.03, 0.22, 1.0], WHITE: V3 = [0.8, 0.8, 0.77], CYAN: V3 = [0.0, 0.75, 0.8], MAGENTA: V3 = [0.8, 0.05, 0.7];
 const PANEL: V3 = [0.055, 0.058, 0.062], DIAL: V3 = [0.012, 0.012, 0.014], GLASS: V3 = [0.015, 0.018, 0.022];
@@ -64,8 +64,8 @@ const ARC_GAIN = 0.7, LEGEND_GLOW = 0.12, FLASH_HZ = 2;
 // ---- layout (panel plane z = 0, camera on +z). Tiles abut (1 mm overlap) like a real annunciator matrix.
 export const GRID = { cols: SYSTEMS.length, rows: ROWS.length, pitchX: 0.19, pitchY: 0.085, top: 0.55 };
 const GAUGE_X = [-0.9, -0.3, 0.3, 0.9], GAUGE_Y = -0.18, GAUGE_R = 0.215;
-const ARC_START = (210 * Math.PI) / 180, ARC_SPAN = (240 * Math.PI) / 180;   // value 0 -> 210 deg, 1 -> -30 deg
-interface GaugeDef { sys: System; nominal: number; bad: "high" | "low" }
+export const ARC_START = (210 * Math.PI) / 180, ARC_SPAN = (240 * Math.PI) / 180;   // value 0 -> 210 deg, 1 -> -30 deg
+export interface GaugeDef { sys: System; nominal: number; bad: "high" | "low" }
 const GAUGES: GaugeDef[] = [
   { sys: "eng", nominal: 0.45, bad: "high" },     // exhaust gas temperature
   { sys: "hyd", nominal: 0.72, bad: "low" },      // hydraulic pressure
@@ -86,8 +86,8 @@ export interface Cascade {
   caution: number; warning: number; spread: number;
 }
 
-interface Lamp { mesh: SVMesh; sys: System | null; level: Level; on: boolean; flash: boolean; emit: V3 }
-interface Gauge { def: GaugeDef; needle: SVMesh; readout: SVMesh; arcs: SVMesh[]; face: SVMesh; v: number; phase: number; rate: number }
+export interface Lamp { mesh: SVMesh; sys: System | null; level: Level; on: boolean; flash: boolean; emit: V3 }
+export interface Gauge { def: GaugeDef; needle: SVMesh; readout: SVMesh; arcs: SVMesh[]; face: SVMesh; v: number; phase: number; rate: number }
 
 function mesh(geo: THREE.BufferGeometry, albedo: V3, sv: SVTag, rough = 0.7, metal = 0): SVMesh {
   const mat = new THREE.MeshStandardMaterial({ roughness: rough, metalness: metal });
@@ -111,8 +111,8 @@ export class DashboardSim {
   step = 0;
   lighting: DashLighting;
   cascade: Cascade | null = null;
-  private lamps = new Map<string, Lamp>();
-  private gauges: Gauge[] = [];
+  protected lamps = new Map<string, Lamp>();
+  protected gauges: Gauge[] = [];
   private statics: { mesh: SVMesh; emit: V3; k: number }[] = [];   // emissive symbology scaled by the dimmer only
   private lights: THREE.Object3D[] = [];
 
@@ -253,7 +253,7 @@ export class DashboardSim {
 
   private emit(e: Event) { (this.scene.userData.svEvents as Event[]).push(e); }
 
-  private setState(m: SVMesh, s: string) {
+  protected setState(m: SVMesh, s: string) {
     const sv = m.userData.sv as SVTag;
     if (sv.state === s) return;
     this.emit({ type: "state_change", object_id: sv.id, data: { from: sv.state ?? "default", to: s, step: this.step } });
@@ -265,7 +265,7 @@ export class DashboardSim {
     sv.tags = [...new Set([...(sv.tags ?? []), "hazard"])].sort();
   }
 
-  private light(id: string, on: boolean, flash = false) {
+  protected light(id: string, on: boolean, flash = false) {
     const l = this.lamps.get(id)!;
     l.on = on; l.flash = flash;
     this.setState(l.mesh, on ? LIT_NAME[l.level] : "off");
@@ -291,13 +291,13 @@ export class DashboardSim {
   private fire() {
     const c = this.cascade;
     if (!c) return;
-    const g = this.gauges.find((x) => x.def.sys === c.system)!;
+    const g = this.gauges.find((x) => x.def.sys === c.system);   // none for systems without a gauge (play mode)
     if (this.step === c.caution) {
       this.degrade(c.system, 1);
       this.status(c.system, "caution");
       this.light("master_caution", true, true);
       this.hazard(this.lamps.get("master_caution")!.mesh);
-      for (const m of [g.needle, g.readout, g.face, ...g.arcs]) this.hazard(m);
+      if (g) for (const m of [g.needle, g.readout, g.face, ...g.arcs]) this.hazard(m);
     }
     if (this.step === c.warning) {
       ROWS.forEach((_, r) => this.hazard(this.lamps.get(`ann_${c.system}_${r}`)!.mesh));   // whole faulted column
@@ -314,7 +314,10 @@ export class DashboardSim {
     }
   }
 
-  private updateGauges() {
+  /** Displayed gauge value; play mode overrides it. */
+  protected gaugeValue(_g: Gauge, v: number): number { return v; }
+
+  protected updateGauges() {
     const c = this.cascade;
     for (const g of this.gauges) {
       let v = g.def.nominal + 0.025 * Math.sin(g.phase + 2 * Math.PI * g.rate * this.time);
@@ -325,6 +328,7 @@ export class DashboardSim {
         v = g.def.nominal + k1 * (amber - g.def.nominal);
         if (this.step >= c.warning) v = amber + Math.min(1, (this.step - c.warning + 1) / 3) * (red - amber);
       }
+      v = this.gaugeValue(g, v);
       g.v = v;
       g.needle.rotation.z = ARC_START - ARC_SPAN * v;
       const band = bandOf(g.def.bad, v);
